@@ -2,6 +2,7 @@ import os
 
 import torch
 import copy
+import torch.nn.functional as F
 
 from pcdet.datasets.augmentor.augmentor_utils import *
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
@@ -15,11 +16,13 @@ class PVRCNN_SSL(Detector3DTemplate):
         # something changes so need deep copy
         model_cfg_copy = copy.deepcopy(model_cfg)
         dataset_copy = copy.deepcopy(dataset)
-        self.pv_rcnn = PVRCNN(model_cfg=model_cfg, num_class=num_class, dataset=dataset)
-
-        self.pv_rcnn_ema = PVRCNN(model_cfg=model_cfg_copy, num_class=num_class, dataset=dataset_copy)
+        self.pv_rcnn = PVRCNN(model_cfg=model_cfg, num_class=num_class, dataset=dataset) # teacher
+        self.pv_rcnn_ema = PVRCNN(model_cfg=model_cfg_copy, num_class=num_class, dataset=dataset_copy) #student
+        
+        # break gradient graph for student
         for param in self.pv_rcnn_ema.parameters():
             param.detach_()
+        
         self.add_module('pv_rcnn', self.pv_rcnn)
         self.add_module('pv_rcnn_ema', self.pv_rcnn_ema)
 
@@ -48,14 +51,85 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict_ema[k[:-4]] = batch_dict[k]
                 else:
                     batch_dict_ema[k] = batch_dict[k]
+            
+           
 
             with torch.no_grad():
                 # self.pv_rcnn_ema.eval()  # Important! must be in train mode
-                for cur_module in self.pv_rcnn_ema.module_list:
+                               
+                
+                #! Actual backbone features
+                for cur_module in self.pv_rcnn.module_list[:-1]:
+                    try:
+                        batch_dict = cur_module(batch_dict, disable_gt_roi_when_pseudo_labeling=True)
+                    except:
+                        batch_dict = cur_module(batch_dict)
+                #! Augmented backbone features
+                for cur_module in self.pv_rcnn_ema.module_list[:-1]:
                     try:
                         batch_dict_ema = cur_module(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
                     except:
                         batch_dict_ema = cur_module(batch_dict_ema)
+
+                teacher_head=self.pv_rcnn.module_list[-1]
+                student_head=self.pv_rcnn_ema.module_list[-1]
+                
+                #! Generate object proposals (teacher), 
+                #! keeps the top-N proposals ranked by iou/cls/cls+iou scores (ablations).
+                
+                batch_dict_1 = teacher_head(batch_dict)
+                batch_dict_2 = student_head(batch_dict)
+                
+                batch_dict_ema_1 = teacher_head(batch_dict_ema)
+                batch_dict_ema_2 = student_head(batch_dict_ema)
+                
+                
+                #! As per soft-teacher we need foreground and background mask,
+                #!  we don't have this in our pipeline 
+                s_roi_cls =  batch_dict_ema_2['rcnn_cls']
+                fg =  batch_dict_ema_1['rcnn_cls']
+                score= fg.detach()
+                FG_THRESH = 0.9 # add this to Config
+                mask= score>FG_THRESH
+                bg = (1-fg)
+                reliablity = bg*(1-mask)
+                reliablity/= reliablity.sum(dim=-1, keep_dim= True)
+
+                #! Test and add lu_cls loss into loss dict
+                nfg= mask.sum(dim=-1)
+                lu_cls = (1/nfg) * (
+                    torch.sum(
+                    mask * F.cross_entropy(fg, s_roi_cls), 
+                    dim=-1)) + (
+                        torch.sum(
+                            reliablity * F.cross_entropy(bg, s_roi_cls), 
+                            dim=-1))
+                
+                
+                
+                
+                s_roi_reg=batch_dict_ema_2['rcnn_reg']
+
+                #batch_dict_ema['rcnn_reg']
+
+
+                #t_features=batch_dict['shared_features']
+                # t_rois = batch_dict['rois'] #predicted_boxes from proposal layer
+                # t_roi_labels = batch_dict['roi_labels'], #predicted_boxes labels from proposal layer
+                # t_roi_scores = batch_dict['roi_scores'] #pred cls score
+                # t_batch_cls_preds = batch_dict['batch_cls_preds'] 
+                # t_batch_box_preds = batch_dict['batch_box_preds'] 
+
+                batch_dict_ema = student_head(batch_dict_ema)
+                s_features=batch_dict_ema['shared_features']
+                s_rois = batch_dict_ema['rois'] #predicted_boxes from proposal layer
+                s_roi_labels = batch_dict_ema['roi_labels'], #predicted_boxes labels from proposal layer
+                s_roi_scores = batch_dict_ema['roi_scores'] #pred cls score
+                s_batch_cls_preds = batch_dict_ema['batch_cls_preds'] 
+                s_batch_box_preds = batch_dict_ema['batch_box_preds'] 
+
+
+                #batch_dict = self.pv_rcnn.module_list[-1](batch_dict)
                 pred_dicts, recall_dicts = self.pv_rcnn_ema.post_processing(batch_dict_ema,
                                                                             no_recall_dict=True, override_thresh=0.0, no_nms=self.no_nms)
 
@@ -237,7 +311,8 @@ class PVRCNN_SSL(Detector3DTemplate):
             }
             return ret_dict, tb_dict_, disp_dict
 
-        else:
+        else: # teacher inference
+            
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
 
@@ -261,6 +336,14 @@ class PVRCNN_SSL(Detector3DTemplate):
         alpha = min(1 - 1 / (self.global_step + 1), alpha)
         for ema_param, param in zip(self.pv_rcnn_ema.parameters(), self.pv_rcnn.parameters()):
             ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
+
+
+    def freeze(self, model_ref: str):
+        assert model_ref in self.submodules
+        model = getattr(self, model_ref)
+        model.eval()
+        for param in model.parameters():
+            param.requires_grad = False
 
     def load_params_from_file(self, filename, logger, to_cpu=False):
         if not os.path.isfile(filename):
