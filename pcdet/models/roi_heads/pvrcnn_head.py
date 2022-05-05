@@ -36,6 +36,10 @@ class PVRCNNHead(RoIHeadTemplate):
         self.cls_layers = self.make_fc_layers(
             input_channels=pre_channel, output_channels=self.num_class, fc_list=self.model_cfg.CLS_FC
         )
+        #! This can be added as a learnable fg-bg mask and later use for reliablity 
+        # self.cls_mask_layer = self.make_fc_layers(
+        #     input_channels=pre_channel, output_channels=1, fc_list=self.model_cfg.CLS_FC
+        # )
         self.reg_layers = self.make_fc_layers(
             input_channels=pre_channel,
             output_channels=self.box_coder.code_size * self.num_class,
@@ -140,7 +144,7 @@ class PVRCNNHead(RoIHeadTemplate):
         :param input_data: input dict
         :return:
         """
-
+        
         # use test-time nms for pseudo label generation
         targets_dict = self.proposal_layer(
             batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training and not disable_gt_roi_when_pseudo_labeling else 'TEST']
@@ -159,11 +163,16 @@ class PVRCNNHead(RoIHeadTemplate):
         batch_size_rcnn = pooled_features.shape[0]
         pooled_features = pooled_features.permute(0, 2, 1).\
             contiguous().view(batch_size_rcnn, -1, grid_size, grid_size, grid_size)  # (BxN, C, 6, 6, 6)
-
         shared_features = self.shared_fc_layer(pooled_features.view(batch_size_rcnn, -1, 1))
+        
+
+        
         rcnn_cls = self.cls_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, 1 or 2)
         rcnn_reg = self.reg_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, C)
-
+        #rcnn_fg = self.cls_mask_layer(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, 1 or 2)
+        #rcnn_bg = 1- rcnn_fg
+        #calculate reliablity
+        #rcnn_cls=rcnn_cls*reliablity
         if not self.training or self.predict_boxes_when_training:
             batch_cls_preds, batch_box_preds = self.generate_predicted_boxes(
                 batch_size=batch_dict['batch_size'], rois=batch_dict['rois'], cls_preds=rcnn_cls, box_preds=rcnn_reg
@@ -171,9 +180,11 @@ class PVRCNNHead(RoIHeadTemplate):
             batch_dict['batch_cls_preds'] = batch_cls_preds
             batch_dict['batch_box_preds'] = batch_box_preds
             batch_dict['cls_preds_normalized'] = False
+            batch_dict['rcnn_cls'], batch_dict['rcnn_reg'] = rcnn_cls,rcnn_reg 
         if self.training or self.print_loss_when_eval:
-            targets_dict['rcnn_cls'] = rcnn_cls
+            targets_dict['rcnn_cls'] = rcnn_cls 
             targets_dict['rcnn_reg'] = rcnn_reg
+            #targets_dict['rcnn_reliability'] = reliablity
 
             self.forward_ret_dict = targets_dict
 
