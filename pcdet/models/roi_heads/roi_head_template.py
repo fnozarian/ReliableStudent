@@ -44,7 +44,7 @@ class RoIHeadTemplate(nn.Module):
         return fc_layers
 
     @torch.no_grad()
-    def proposal_layer(self, batch_dict, nms_config):
+    def proposal_layer(self, batch_dict,  nms_config, augmented_box_preds=None, augmented_cls_preds=None):
         """
         Args:
             batch_dict:
@@ -66,8 +66,12 @@ class RoIHeadTemplate(nn.Module):
             return batch_dict
 
         batch_size = batch_dict['batch_size']
-        batch_box_preds = batch_dict['batch_box_preds']
-        batch_cls_preds = batch_dict['batch_cls_preds']
+        if augmented_box_preds is None  and augmented_cls_preds is None:
+            batch_box_preds = batch_dict['batch_box_preds']
+            batch_cls_preds = batch_dict['batch_cls_preds']
+        else:
+            batch_box_preds,batch_cls_preds= augmented_box_preds, augmented_cls_preds
+
         rois = batch_box_preds.new_zeros((batch_size, nms_config.NMS_POST_MAXSIZE, batch_box_preds.shape[-1]))
         roi_scores = batch_box_preds.new_zeros((batch_size, nms_config.NMS_POST_MAXSIZE))
         roi_labels = batch_box_preds.new_zeros((batch_size, nms_config.NMS_POST_MAXSIZE), dtype=torch.long)

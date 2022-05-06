@@ -139,32 +139,33 @@ class PVRCNNHead(RoIHeadTemplate):
                           - (local_roi_size.unsqueeze(dim=1) / 2)  # (B, 6x6x6, 3)
         return roi_grid_points
 
-    def forward(self, batch_dict, disable_gt_roi_when_pseudo_labeling=False):
+    def forward(self, batch_dict, shared_features=None, augmented_box_preds=None, augmented_cls_preds=None, disable_gt_roi_when_pseudo_labeling=False):
         """
         :param input_data: input dict
         :return:
         """
-        
-        # use test-time nms for pseudo label generation
-        targets_dict = self.proposal_layer(
-            batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training and not disable_gt_roi_when_pseudo_labeling else 'TEST']
-        )
+        if shared_features is None:
+            # use test-time nms for pseudo label generation
+            targets_dict = self.proposal_layer(
+                batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training and not disable_gt_roi_when_pseudo_labeling else 'TEST'],
+                augmented_box_preds=augmented_box_preds, augmented_cls_preds=augmented_cls_preds
+            )
 
-        # should not use gt_roi for pseudo label generation
-        if (self.training or self.print_loss_when_eval) and not disable_gt_roi_when_pseudo_labeling:
-            targets_dict = self.assign_targets(batch_dict)
-            batch_dict['rois'] = targets_dict['rois']
-            batch_dict['roi_labels'] = targets_dict['roi_labels']
+            # should not use gt_roi for pseudo label generation
+            if (self.training or self.print_loss_when_eval) and not disable_gt_roi_when_pseudo_labeling:
+                targets_dict = self.assign_targets(batch_dict)
+                batch_dict['rois'] = targets_dict['rois']
+                batch_dict['roi_labels'] = targets_dict['roi_labels']
 
-        # RoI aware pooling
-        pooled_features = self.roi_grid_pool(batch_dict)  # (BxN, 6x6x6, C)
+            # RoI aware pooling
+            pooled_features = self.roi_grid_pool(batch_dict)  # (BxN, 6x6x6, C)
 
-        grid_size = self.model_cfg.ROI_GRID_POOL.GRID_SIZE
-        batch_size_rcnn = pooled_features.shape[0]
-        pooled_features = pooled_features.permute(0, 2, 1).\
-            contiguous().view(batch_size_rcnn, -1, grid_size, grid_size, grid_size)  # (BxN, C, 6, 6, 6)
-        shared_features = self.shared_fc_layer(pooled_features.view(batch_size_rcnn, -1, 1))
-        
+            grid_size = self.model_cfg.ROI_GRID_POOL.GRID_SIZE
+            batch_size_rcnn = pooled_features.shape[0]
+            pooled_features = pooled_features.permute(0, 2, 1).\
+                contiguous().view(batch_size_rcnn, -1, grid_size, grid_size, grid_size)  # (BxN, C, 6, 6, 6)
+            shared_features = self.shared_fc_layer(pooled_features.view(batch_size_rcnn, -1, 1))
+            batch_dict['shared_features']=shared_features
 
         
         rcnn_cls = self.cls_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, 1 or 2)
