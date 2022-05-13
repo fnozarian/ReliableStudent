@@ -19,12 +19,16 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.pv_rcnn = PVRCNN(model_cfg=model_cfg, num_class=num_class, dataset=dataset) # teacher
         self.pv_rcnn_ema = PVRCNN(model_cfg=model_cfg_copy, num_class=num_class, dataset=dataset_copy) #student
         
-        # break gradient graph for student
+        # break gradient graph for student, we need to change it for student
         for param in self.pv_rcnn_ema.parameters():
             param.detach_()
         
+        self.teacher_head=self.pv_rcnn.module_list[-1]
+        self.student_head=self.pv_rcnn_ema.module_list[-1]
+
         self.add_module('pv_rcnn', self.pv_rcnn)
         self.add_module('pv_rcnn_ema', self.pv_rcnn_ema)
+
 
         # self.module_list = self.build_networks()
         # self.module_list_ema = self.build_networks()
@@ -52,7 +56,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     batch_dict_ema[k] = batch_dict[k]
             
-           
+           #! disable_gt_roi_when_pseudo_labeling is FALSE for teacher
 
             with torch.no_grad():
                 # self.pv_rcnn_ema.eval()  # Important! must be in train mode
@@ -60,10 +64,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                 
                 #! Actual teacher's backbone features
                 for cur_module in self.pv_rcnn.module_list[:-1]:
-                    try:
-                        batch_dict = cur_module(batch_dict, disable_gt_roi_when_pseudo_labeling=True)
-                    except:
-                        batch_dict = cur_module(batch_dict)
+                    batch_dict = cur_module(batch_dict)
+                    
                 #! Augmented student's backbone features
                 for cur_module in self.pv_rcnn_ema.module_list[:-1]:
                     try:
@@ -71,62 +73,59 @@ class PVRCNN_SSL(Detector3DTemplate):
                     except:
                         batch_dict_ema = cur_module(batch_dict_ema)
 
-                teacher_head=self.pv_rcnn.module_list[-1]
-                student_head=self.pv_rcnn_ema.module_list[-1]
                 
-                #! Generate object proposals (teacher), 
-                #! keeps the top-N proposals ranked by iou/cls/cls+iou scores (ablations).
                 
-                batch_dict_1 = teacher_head(batch_dict)
-                batch_dict_2 = student_head(batch_dict)
+                #! Already we have Generated object proposals for teacher and student,  
+                # data_dict['batch_cls_preds'] data_dict['batch_box_preds'] from anchor_head_single->forward
+                # Next: keeps the top-N proposals ranked by iou/cls/cls+iou scores (ablations).
                 
-                batch_dict_ema_1 = teacher_head(batch_dict_ema)
-                batch_dict_ema_2 = student_head(batch_dict_ema)
+                #batch_dict= self.teacher_head.proposal_layer(batch_dict, nms_config=self.model_cfg.ROI_HEAD.NMS_CONFIG['TEST']) # PL generation
+                
+                batch_dict = self.teacher_head(batch_dict) 
+                
+                batch_dict_ema['teacher_rcnn_boxes']=batch_dict['rois'] #batch_dict['batch_box_preds']
+                batch_dict_ema['teacher_rcnn_cls']=batch_dict['roi_scores'] #batch_dict['batch_cls_preds']
+                batch_dict_ema['teacher_rcnn_labels']=batch_dict['roi_labels'] #1+index of torch.max(batch_cls_preds)
+                
+                batch_dict_ema = self.student_head(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
+
+
+
+
+
+
+                # ##---------------------------------------------
+                
+                # batch_dict_2= self.student_head(batch_dict, disable_gt_roi_when_pseudo_labeling=True)
+                # batch_dict_ema_1 = self.teacher_head(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
+                # batch_dict_ema_2 = self.student_head(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
                 
                 
                 
 
-                #! cls score on strong augmented data from teacher head
-                t_roi_cls_ema, t_roi_reg_ema =  batch_dict_ema_1['rcnn_cls'],batch_dict_ema_1['rcnn_reg']
-                t_batch_cls_preds_ema,t_batch_box_preds_ema = batch_dict_ema_1['batch_cls_preds'],batch_dict_ema_1['batch_box_preds'] # proposals
+                # #! cls score on strong augmented data from teacher head
+                # t_roi_cls_ema, t_roi_reg_ema =  batch_dict_ema_1['rcnn_cls'],batch_dict_ema_1['rcnn_reg']
+                # t_batch_cls_preds_ema,t_batch_box_preds_ema = batch_dict_ema_1['batch_cls_preds'],batch_dict_ema_1['batch_box_preds'] # proposals
                 
-                #! cls score on strong augmented data from student head
-                s_roi_cls_ema, s_roi_reg_ema =  batch_dict_ema_2['rcnn_cls'],batch_dict_ema_2['rcnn_reg']
-                s_batch_cls_preds_ema,s_batch_box_preds_ema = batch_dict_ema_2['batch_cls_preds'],batch_dict_ema_2['batch_box_preds'] # proposals
+                # #! cls score on strong augmented data from student head
+                # s_roi_cls_ema, s_roi_reg_ema =  batch_dict_ema_2['rcnn_cls'],batch_dict_ema_2['rcnn_reg']
+                # s_batch_cls_preds_ema,s_batch_box_preds_ema = batch_dict_ema_2['batch_cls_preds'],batch_dict_ema_2['batch_box_preds'] # proposals
 
-                #! cls score on weak augmented data from teacher head
-                t_roi_cls, t_roi_reg, shared_features =  batch_dict_1['rcnn_cls'],batch_dict_1['rcnn_reg'],batch_dict_ema['shared_features']
-                t_batch_cls_preds,t_batch_box_preds = batch_dict_1['batch_cls_preds'],batch_dict_1['batch_box_preds'] # proposals
+                # #! cls score on weak augmented data from teacher head
+                # t_roi_cls, t_roi_reg, shared_features =  batch_dict_1['rcnn_cls'],batch_dict_1['rcnn_reg'],batch_dict_ema['shared_features']
+                # t_batch_cls_preds,t_batch_box_preds = batch_dict_1['batch_cls_preds'],batch_dict_1['batch_box_preds'] # proposals
 
-                #! cls score on weak augmented data from student head
-                s_roi_cls, s_roi_reg =  batch_dict_2['rcnn_cls'],batch_dict_2['rcnn_reg']
-                s_batch_cls_preds,s_batch_box_preds = batch_dict_2['batch_cls_preds'],batch_dict_2['batch_box_preds'] # proposals                
+                # #! cls score on weak augmented data from student head
+                # s_roi_cls, s_roi_reg =  batch_dict_2['rcnn_cls'],batch_dict_2['rcnn_reg']
+                # s_batch_cls_preds,s_batch_box_preds = batch_dict_2['batch_cls_preds'],batch_dict_2['batch_box_preds'] # proposals                
 
 
-                #! As per soft-teacher we need foreground and background mask,
-                #! we don't have this in our pipeline. We can use teacher cls score to enforce 
-                #! reliablity of student classification
-                FG_THRESH = 0.9 # add this to Config
-                fg_mask= (t_roi_cls_ema.detach()>FG_THRESH).long()
-                bg = (1-t_roi_cls_ema)
-                reliablity = bg*(1-fg_mask)
-                reliablity/= torch.sum(reliablity)
-
-                #! Test and add lu_cls loss into loss dict
-                nfg= fg_mask.sum()
-                lu_cls = (1/nfg) * (torch.sum(
-                        fg_mask * F.cross_entropy(t_roi_cls_ema, s_roi_cls_ema,reduction='none', ignore_index=-1),
-                        dim=-1, keepdim=True)
-                    ) + (torch.sum(
-                        reliablity * F.cross_entropy(bg, s_roi_cls_ema,reduction='none', ignore_index=-1),
-                        dim=-1, keepdim=True)
-                        )
                 
-                # compute_uncertainty_with_aug
-                augmented_box_preds, augmented_cls_preds = self.get_augmented_bboxes(batch_dict_1, t_batch_cls_preds,t_batch_box_preds)
+                # # compute_uncertainty_with_aug
+                # augmented_box_preds, augmented_cls_preds = self.get_augmented_bboxes(batch_dict_1, t_batch_cls_preds,t_batch_box_preds)
                 
 
-                batch_dict_ema_1 = teacher_head(batch_dict_ema,None, augmented_box_preds, augmented_cls_preds)
+                # batch_dict_ema_1 = self.teacher_head(batch_dict_ema,None, augmented_box_preds, augmented_cls_preds)
 
                 #batch_dict = self.pv_rcnn.module_list[-1](batch_dict)
                 pred_dicts, recall_dicts = self.pv_rcnn_ema.post_processing(batch_dict_ema,

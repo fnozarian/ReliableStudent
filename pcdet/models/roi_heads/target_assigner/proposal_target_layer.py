@@ -28,29 +28,84 @@ class ProposalTargetLayer(nn.Module):
                 roi_labels: (B, M)
                 reg_valid_mask: (B, M)
                 rcnn_cls_labels: (B, M)
+
+
+        TARGET_CONFIG:
+            BOX_CODER: ResidualCoder
+            ROI_PER_IMAGE: 128
+            FG_RATIO: 0.5
+            SAMPLE_ROI_BY_EACH_CLASS: True
+            CLS_SCORE_TYPE: roi_iou
+            ENABLE_HYBRID: True
+            CLS_WEIGHT: 0.35
+            CLS_FG_THRESH: 0.75
+            CLS_BG_THRESH: 0.25
+            CLS_BG_THRESH_LO: 0.1
+            HARD_BG_RATIO: 0.8
+            REG_FG_THRESH: 0.55
         """
         batch_rois, batch_gt_of_rois, batch_roi_ious, batch_roi_scores, batch_roi_labels = self.sample_rois_for_rcnn(
             batch_dict=batch_dict
         )
+        
         # regression valid mask
         reg_valid_mask = (batch_roi_ious > self.roi_sampler_cfg.REG_FG_THRESH).long()
-
         # classification label
         if self.roi_sampler_cfg.CLS_SCORE_TYPE == 'cls':
+
             batch_cls_labels = (batch_roi_ious > self.roi_sampler_cfg.CLS_FG_THRESH).long()
             ignore_mask = (batch_roi_ious > self.roi_sampler_cfg.CLS_BG_THRESH) & \
                           (batch_roi_ious < self.roi_sampler_cfg.CLS_FG_THRESH)
-            batch_cls_labels[ignore_mask > 0] = -1
-        elif self.roi_sampler_cfg.CLS_SCORE_TYPE == 'roi_iou':
-            iou_bg_thresh = self.roi_sampler_cfg.CLS_BG_THRESH
-            iou_fg_thresh = self.roi_sampler_cfg.CLS_FG_THRESH
-            fg_mask = batch_roi_ious > iou_fg_thresh
-            bg_mask = batch_roi_ious < iou_bg_thresh
-            interval_mask = (fg_mask == 0) & (bg_mask == 0)
+            batch_cls_labels[ignore_mask > 0] = -1  # all preds inside middle-region (0.25-0.75) are considered ignored.
 
-            batch_cls_labels = (fg_mask > 0).float()
-            batch_cls_labels[interval_mask] = \
+        elif self.roi_sampler_cfg.CLS_SCORE_TYPE == 'roi_iou': #or 'soft_teacher':
+            
+            iou_bg_thresh = self.roi_sampler_cfg.CLS_BG_THRESH 
+            iou_fg_thresh = self.roi_sampler_cfg.CLS_FG_THRESH
+            fg_mask = batch_roi_ious > iou_fg_thresh # >0.75
+            bg_mask = batch_roi_ious < iou_bg_thresh # <0.25
+            interval_mask = (fg_mask == 0) & (bg_mask == 0) 
+            batch_cls_labels = (fg_mask > 0).float() # 1 or zero
+            
+
+            #! @Farzad: rcnn cls labels are created here. The inverval mask or hard bgs are weighted (linearly) according to
+            # their iou-score with pseudo-labels (becasue of batch_roi_ious in nominator)
+            #! Interval_mask form soft-teacher! FG_THRESH = 0.9 # fg_mask= (t_roi_cls_ema.detach()>FG_THRESH).long()
+            
+            if 'teacher_rcnn_cls' in batch_dict:
+                teacher_rcnn_cls = batch_dict['teacher_rcnn_cls']
+
+                #! @Farzad: it can be combination of roi_iou (student) and teacher_rcnn_cls_pred
+                if self.roi_sampler_cfg.ENABLE_HYBRID:
+                    
+                    roi_iou_score = \
+                        (batch_roi_ious - iou_bg_thresh) / (iou_fg_thresh-iou_bg_thresh)
+                    
+                    # should we use similar normalzation for teacher_rcnn_cls as we used for roi_iou_score  
+                    #print(teacher_rcnn_cls.max(),teacher_rcnn_cls.min())
+                    #print(roi_iou_score.max(),roi_iou_score.min())
+                    
+
+                    batch_cls_labels[interval_mask]= \
+                        (
+                            (self.roi_sampler_cfg.CLS_WEIGHT*teacher_rcnn_cls) + 
+                            ((1-self.roi_sampler_cfg.CLS_WEIGHT)*roi_iou_score)
+
+                        )[interval_mask]
+                    
+                else:
+                    batch_cls_labels[interval_mask] = teacher_rcnn_cls[interval_mask]
+
+
+            else:
+                # roi_iou
+                #batch_cls_labels = (fg_mask > 0).float()
+                batch_cls_labels[interval_mask] = \
                 (batch_roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
+        
+        elif self.roi_sampler_cfg.CLS_SCORE_TYPE == 'raw_roi_iou': # st3d settings
+            batch_cls_labels = batch_roi_ious
+        
         else:
             raise NotImplementedError
 

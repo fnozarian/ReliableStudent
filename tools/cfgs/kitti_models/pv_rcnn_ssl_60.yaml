@@ -193,7 +193,8 @@ MODEL:
 
             SAMPLE_ROI_BY_EACH_CLASS: True
             CLS_SCORE_TYPE: roi_iou
-
+            ENABLE_HYBRID: True
+            CLS_WEIGHT: 0.35
             CLS_FG_THRESH: 0.75
             CLS_BG_THRESH: 0.25
             CLS_BG_THRESH_LO: 0.1
