@@ -21,6 +21,8 @@ do
 done
 echo $PORT
 
+mkdir -p work_dirs
+
 srun -p ${PARTITION} \
     --job-name=${JOB_NAME} \
     --gres=gpu:${GPUS_PER_NODE} \
@@ -29,4 +31,4 @@ srun -p ${PARTITION} \
     --cpus-per-task=${CPUS_PER_TASK} \
     --kill-on-bad-exit=1 \
     ${SRUN_ARGS} \
-    python -u train.py --launcher slurm --tcp_port $PORT ${PY_ARGS} 2>&1|tee work_dirs/LOG_$2.log &
+    python -u pretrain.py --launcher slurm --tcp_port $PORT ${PY_ARGS} 2>&1|tee work_dirs/LOG_$2.log &

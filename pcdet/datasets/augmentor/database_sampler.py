@@ -15,12 +15,16 @@ class DataBaseSampler(object):
         self.db_infos = {}
         for class_name in class_names:
             self.db_infos[class_name] = []
-
+        
         for db_info_path in sampler_cfg.DB_INFO_PATH:
             db_info_path = self.root_path.resolve() / db_info_path
-            with open(str(db_info_path), 'rb') as f:
-                infos = pickle.load(f)
-                [self.db_infos[cur_class].extend(infos[cur_class]) for cur_class in class_names]
+            try:
+                with open(str(db_info_path), 'rb') as f:
+                    infos = pickle.load(f)
+                    [self.db_infos[cur_class].extend(infos[cur_class]) for cur_class in class_names]
+            except FileNotFoundError:
+                print(f"{str(db_info_path)} not found.")
+                return
 
         for func_name, val in sampler_cfg.PREPARE.items():
             self.db_infos = getattr(self, func_name)(self.db_infos, val)
@@ -156,7 +160,7 @@ class DataBaseSampler(object):
         data_dict['points'] = points
         return data_dict
 
-    def __call__(self, data_dict):
+    def __call__(self, data_dict, no_db_sample=False):
         """
         Args:
             data_dict:
@@ -193,7 +197,9 @@ class DataBaseSampler(object):
                 total_valid_sampled_dict.extend(valid_sampled_dict)
 
         sampled_gt_boxes = existed_boxes[gt_boxes.shape[0]:, :]
-        if total_valid_sampled_dict.__len__() > 0:
+
+        # do not use db sampler if we do not know gt boxes
+        if total_valid_sampled_dict.__len__() > 0 and not no_db_sample:
             data_dict = self.add_sampled_boxes_to_scene(data_dict, sampled_gt_boxes, total_valid_sampled_dict)
 
         data_dict.pop('gt_boxes_mask')

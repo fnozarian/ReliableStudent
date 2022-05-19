@@ -35,7 +35,7 @@ def parse_config():
     parser.add_argument('--fix_random_seed', action='store_true', default=False, help='')
     parser.add_argument('--ckpt_save_interval', type=int, default=1, help='number of training epochs')
     parser.add_argument('--local_rank', type=int, default=0, help='local rank for distributed training')
-    parser.add_argument('--max_ckpt_save_num', type=int, default=15, help='max number of saved checkpoint')
+    parser.add_argument('--max_ckpt_save_num', type=int, default=30, help='max number of saved checkpoint')
     parser.add_argument('--merge_all_iters_to_one_epoch', action='store_true', default=False, help='')
     parser.add_argument('--set', dest='set_cfgs', default=None, nargs=argparse.REMAINDER,
                         help='set extra config keys if needed')
@@ -45,17 +45,9 @@ def parse_config():
     parser.add_argument('--save_to_file', action='store_true', default=False, help='')
     parser.add_argument('--split', type=str, default='train')
     parser.add_argument('--repeat', type=int, default=1)
-    parser.add_argument('--thresh', type=str, default='0.5, 0.25, 0.25')
-    parser.add_argument('--sem_thresh', type=str, default='0.4, 0.0, 0.0')
-    # parser.add_argument('--score_thresh', type=float, default=0.0)
-    parser.add_argument('--unlabeled_weight', type=float, default=1.0)
-    parser.add_argument('--unlabeled_supervise_cls', action='store_true', default=True)
-    parser.add_argument('--unlabeled_supervise_refine', action='store_true', default=True)
-    parser.add_argument('--lr', type=float, default=0.0)
-
-    parser.add_argument('--no_nms', action='store_true', default=False)
-    parser.add_argument('--supervise_mode', type=int, default=0)
     parser.add_argument('--dbinfos', type=str, default='kitti_dbinfos_train.pkl')
+
+    parser.add_argument('--lr', type=float, default=0.0)
 
     args = parser.parse_args()
 
@@ -67,22 +59,13 @@ def parse_config():
         cfg_from_list(args.set_cfgs, cfg)
 
     cfg.DATA_CONFIG.DATA_SPLIT['train'] = args.split
-    assert cfg.DATA_CONFIG.DATA_AUGMENTOR.AUG_CONFIG_LIST[0].NAME == 'gt_sampling'  # hardcode
-    cfg.DATA_CONFIG.DATA_AUGMENTOR.AUG_CONFIG_LIST[0].DB_INFO_PATH = [args.dbinfos]
     cfg.DATA_CONFIG.REPEAT = args.repeat
 
-    cfg.MODEL.THRESH = [float(x) for x in args.thresh.split(',')]
-    cfg.MODEL.SEM_THRESH = [float(x) for x in args.sem_thresh.split(',')]
-    cfg.MODEL.UNLABELED_SUPERVISE_CLS = args.unlabeled_supervise_cls
-    cfg.MODEL.UNLABELED_SUPERVISE_REFINE = args.unlabeled_supervise_refine
-    cfg.MODEL.UNLABELED_WEIGHT = args.unlabeled_weight
-    cfg.MODEL.NO_NMS = args.no_nms
-    cfg.MODEL.SUPERVISE_MODE = args.supervise_mode
+    assert cfg.DATA_CONFIG.DATA_AUGMENTOR.AUG_CONFIG_LIST[0].NAME == 'gt_sampling'  # hardcode
+    cfg.DATA_CONFIG.DATA_AUGMENTOR.AUG_CONFIG_LIST[0].DB_INFO_PATH = [args.dbinfos]
 
     if args.lr > 0.0:
         cfg.OPTIMIZATION.LR = args.lr
-
-    # cfg.MODEL.POST_PROCESSING.SCORE_THRESH = args.score_thresh
 
     return args, cfg
 
@@ -222,7 +205,7 @@ def main():
     )
     eval_output_dir = output_dir / 'eval' / 'eval_with_train'
     eval_output_dir.mkdir(parents=True, exist_ok=True)
-    args.start_epoch = max(args.epochs - 20, 0)  # Only evaluate the last 20 epochs
+    args.start_epoch = max(args.epochs - 50, 0)  # Only evaluate the last 35 epochs
 
     repeat_eval_ckpt(
         model.module if dist_train else model,

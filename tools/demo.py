@@ -1,20 +1,76 @@
 import argparse
 import glob
 from pathlib import Path
-
-import mayavi.mlab as mlab
+print('before mayavi import')
+# import mayavi.mlab as mlab
 import numpy as np
 import torch
+import sys
 
 from pcdet.config import cfg, cfg_from_yaml_file
 from pcdet.datasets import DatasetTemplate
 from pcdet.models import build_network, load_data_to_gpu
-from pcdet.utils import common_utils
-from visual_utils import visualize_utils as V
+from pcdet.utils import common_utils, object3d_kitti, calibration_kitti
+# from visual_utils import visualize_utils as V
+
+try:
+    from plyfile import PlyData, PlyElement
+except:
+    print("Please install the module 'plyfile' for PLY i/o, e.g.")
+    print("pip install plyfile")
+    sys.exit(-1)
+import trimesh
+
+
+def write_ply(points, filename, text=True):
+    """ input: Nx3, write points to filename as PLY format. """
+    points = [(points[i,0], points[i,1], points[i,2]) for i in range(points.shape[0])]
+    vertex = np.array(points, dtype=[('x', 'f4'), ('y', 'f4'),('z', 'f4')])
+    el = PlyElement.describe(vertex, 'vertex', comments=['vertices'])
+    PlyData([el], text=text).write(filename)
+
+
+def write_oriented_bbox(scene_bbox, out_filename):
+    """Export oriented (around Z axis) scene bbox to meshes
+    Args:
+        scene_bbox: (N x 7 numpy array): xyz pos of center and 3 lengths (dx,dy,dz)
+            and heading angle around Z axis.
+            Y forward, X right, Z upward. heading angle of positive X is 0,
+            heading angle of positive Y is 90 degrees.
+        out_filename: (string) filename
+    """
+    def heading2rotmat(heading_angle):
+        pass
+        rotmat = np.zeros((3,3))
+        rotmat[2,2] = 1
+        cosval = np.cos(heading_angle)
+        sinval = np.sin(heading_angle)
+        rotmat[0:2,0:2] = np.array([[cosval, -sinval],[sinval, cosval]])
+        return rotmat
+
+    def convert_oriented_box_to_trimesh_fmt(box):
+        ctr = box[:3]
+        lengths = box[3:6]
+        trns = np.eye(4)
+        trns[0:3, 3] = ctr
+        trns[3,3] = 1.0            
+        trns[0:3,0:3] = heading2rotmat(box[6])
+        box_trimesh_fmt = trimesh.creation.box(lengths, trns)
+        return box_trimesh_fmt
+
+    scene = trimesh.scene.Scene()
+    for box in scene_bbox:
+        scene.add_geometry(convert_oriented_box_to_trimesh_fmt(box))        
+    
+    mesh_list = trimesh.util.concatenate(scene.dump())
+    # save to ply file    
+    trimesh.io.export.export_mesh(mesh_list, out_filename, file_type='ply')
+    
+    return
 
 
 class DemoDataset(DatasetTemplate):
-    def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None, ext='.bin'):
+    def __init__(self, dataset_cfg, class_names, training=True, root_path=None, label_path=None, logger=None, ext='.bin'):
         """
         Args:
             root_path:
@@ -27,6 +83,7 @@ class DemoDataset(DatasetTemplate):
             dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger
         )
         self.root_path = root_path
+        self.label_path = label_path
         self.ext = ext
         data_file_list = glob.glob(str(root_path / f'*{self.ext}')) if self.root_path.is_dir() else [self.root_path]
 
@@ -44,9 +101,17 @@ class DemoDataset(DatasetTemplate):
         else:
             raise NotImplementedError
 
+        calib_path = str(self.label_path).replace('label_2', 'calib')
+        calib = calibration_kitti.Calibration(calib_path)
+
+        labels = np.array([x.generate_7(calib) for x in object3d_kitti.get_objects_from_label(self.label_path) if x.w != -1])
+
+        print(labels)
+
         input_dict = {
             'points': points,
             'frame_id': index,
+            'labels': labels,
         }
 
         data_dict = self.prepare_data(data_dict=input_dict)
@@ -58,6 +123,8 @@ def parse_config():
     parser.add_argument('--cfg_file', type=str, default='cfgs/kitti_models/second.yaml',
                         help='specify the config for demo')
     parser.add_argument('--data_path', type=str, default='demo_data',
+                        help='specify the point cloud data file or directory')
+    parser.add_argument('--label_path', type=str, default='demo_data',
                         help='specify the point cloud data file or directory')
     parser.add_argument('--ckpt', type=str, default=None, help='specify the pretrained model')
     parser.add_argument('--ext', type=str, default='.bin', help='specify the extension of your point cloud data file')
@@ -75,7 +142,7 @@ def main():
     logger.info('-----------------Quick Demo of OpenPCDet-------------------------')
     demo_dataset = DemoDataset(
         dataset_cfg=cfg.DATA_CONFIG, class_names=cfg.CLASS_NAMES, training=False,
-        root_path=Path(args.data_path), ext=args.ext, logger=logger
+        root_path=Path(args.data_path), label_path=Path(args.label_path), ext=args.ext, logger=logger
     )
     logger.info(f'Total number of samples: \t{len(demo_dataset)}')
 
@@ -88,13 +155,24 @@ def main():
             logger.info(f'Visualized sample index: \t{idx + 1}')
             data_dict = demo_dataset.collate_batch([data_dict])
             load_data_to_gpu(data_dict)
-            pred_dicts, _ = model.forward(data_dict)
+            pred_dicts, _, _ = model.forward(data_dict)
 
-            V.draw_scenes(
-                points=data_dict['points'][:, 1:], ref_boxes=pred_dicts[0]['pred_boxes'],
-                ref_scores=pred_dicts[0]['pred_scores'], ref_labels=pred_dicts[0]['pred_labels']
-            )
-            mlab.show(stop=True)
+            # Use visualization utils in VoteNet for headless machine
+
+            # V.draw_scenes(
+            #     points=data_dict['points'][:, 1:], ref_boxes=pred_dicts[0]['pred_boxes'],
+            #     ref_scores=pred_dicts[0]['pred_scores'], ref_labels=pred_dicts[0]['pred_labels']
+            # )
+            write_ply(data_dict['points'][:, 1:].cpu().numpy(), '../demo/pc.ply')
+            write_oriented_bbox(pred_dicts[0]['pred_boxes'].cpu().numpy(), '../demo/pred_bbox_ours.ply')
+
+            # gt_bboxes = []
+            # for gt_bbox in data_dict['labels']:
+            #     gt_bboxes.append(gt_bbox)
+            print(pred_dicts[0]['pred_boxes'].cpu().numpy(), data_dict['labels'][0].cpu().numpy())
+
+            write_oriented_bbox(data_dict['labels'][0].cpu().numpy(), '../demo/gt_bbox.ply')
+            # mlab.show(stop=True)
 
     logger.info('Demo done.')
 

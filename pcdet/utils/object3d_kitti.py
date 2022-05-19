@@ -51,6 +51,14 @@ class Object3d(object):
             self.level_str = 'UnKnown'
             return -1
 
+    def generate_7(self, calib):
+        loc = self.loc
+        loc_lidar = calib.rect_to_lidar(loc[None])[0]
+        l, h, w = self.l, self.h, self.w
+        loc_lidar[2] += h / 2
+        gt_boxes_lidar = np.array([loc_lidar[0], loc_lidar[1], loc_lidar[2], l, w, h, -(np.pi / 2 + self.ry)])
+        return gt_boxes_lidar
+
     def generate_corners3d(self):
         """
         generate corners3d representation for this object

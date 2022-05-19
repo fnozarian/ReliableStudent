@@ -1,4 +1,4 @@
-DATASET: 'KittiDataset'
+DATASET: 'KittiDatasetSSL'
 DATA_PATH: '../data/kitti'
 
 POINT_CLOUD_RANGE: [0, -40, -3, 70.4, 40, 1]
@@ -7,6 +7,8 @@ DATA_SPLIT: {
     'train': train,
     'test': val
 }
+
+REPEAT: 1
 
 INFO_PATH: {
     'train': [kitti_infos_train.pkl],
@@ -68,5 +70,3 @@ DATA_PROCESSOR:
         'train': 16000,
         'test': 40000
       }
-
-REPEAT: 1

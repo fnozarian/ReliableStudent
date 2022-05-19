@@ -18,6 +18,8 @@ class PointHeadSimple(PointHeadTemplate):
             output_channels=num_class
         )
 
+        self.print_loss_when_eval = False
+
     def assign_targets(self, input_dict):
         """
         Args:
@@ -47,15 +49,15 @@ class PointHeadSimple(PointHeadTemplate):
 
         return targets_dict
 
-    def get_loss(self, tb_dict=None):
+    def get_loss(self, tb_dict=None, scalar=True):
         tb_dict = {} if tb_dict is None else tb_dict
-        point_loss_cls, tb_dict_1 = self.get_cls_layer_loss()
+        point_loss_cls, tb_dict_1 = self.get_cls_layer_loss(None, scalar=scalar)
 
         point_loss = point_loss_cls
         tb_dict.update(tb_dict_1)
         return point_loss, tb_dict
 
-    def forward(self, batch_dict):
+    def forward(self, batch_dict, disable_gt_roi_when_pseudo_labeling=False):
         """
         Args:
             batch_dict:
@@ -83,7 +85,8 @@ class PointHeadSimple(PointHeadTemplate):
         point_cls_scores = torch.sigmoid(point_cls_preds)
         batch_dict['point_cls_scores'], _ = point_cls_scores.max(dim=-1)
 
-        if self.training:
+        # should not use gt_roi for pseudo label generation
+        if (self.training or self.print_loss_when_eval) and not disable_gt_roi_when_pseudo_labeling:
             targets_dict = self.assign_targets(batch_dict)
             ret_dict['point_cls_labels'] = targets_dict['point_cls_labels']
         self.forward_ret_dict = ret_dict

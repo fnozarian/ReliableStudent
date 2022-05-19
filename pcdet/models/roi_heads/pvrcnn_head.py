@@ -6,8 +6,10 @@ from .roi_head_template import RoIHeadTemplate
 
 
 class PVRCNNHead(RoIHeadTemplate):
-    def __init__(self, input_channels, model_cfg, num_class=1):
-        super().__init__(num_class=num_class, model_cfg=model_cfg)
+    def __init__(self, input_channels, model_cfg, num_class=1,
+                 predict_boxes_when_training=True):
+        super().__init__(num_class=num_class, model_cfg=model_cfg,
+                         predict_boxes_when_training=predict_boxes_when_training)
         self.model_cfg = model_cfg
 
         mlps = self.model_cfg.ROI_GRID_POOL.MLPS
@@ -49,6 +51,8 @@ class PVRCNNHead(RoIHeadTemplate):
             fc_list=self.model_cfg.REG_FC
         )
         self.init_weights(weight_init='xavier')
+
+        self.print_loss_when_eval = False
 
     def init_weights(self, weight_init='xavier'):
         if weight_init == 'kaiming':
@@ -140,16 +144,19 @@ class PVRCNNHead(RoIHeadTemplate):
                           - (local_roi_size.unsqueeze(dim=1) / 2)  # (B, 6x6x6, 3)
         return roi_grid_points
 
-    def forward(self, batch_dict):
+    def forward(self, batch_dict, disable_gt_roi_when_pseudo_labeling=False):
         """
         :param input_data: input dict
         :return:
         """
 
+        # use test-time nms for pseudo label generation
         targets_dict = self.proposal_layer(
-            batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training else 'TEST']
+            batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training and not disable_gt_roi_when_pseudo_labeling else 'TEST']
         )
-        if self.training:
+
+        # should not use gt_roi for pseudo label generation
+        if (self.training or self.print_loss_when_eval) and not disable_gt_roi_when_pseudo_labeling:
             targets_dict = self.assign_targets(batch_dict)
             batch_dict['rois'] = targets_dict['rois']
             batch_dict['roi_labels'] = targets_dict['roi_labels']
@@ -166,14 +173,14 @@ class PVRCNNHead(RoIHeadTemplate):
         rcnn_cls = self.cls_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, 1 or 2)
         rcnn_reg = self.reg_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, C)
 
-        if not self.training:
+        if not self.training or self.predict_boxes_when_training:
             batch_cls_preds, batch_box_preds = self.generate_predicted_boxes(
                 batch_size=batch_dict['batch_size'], rois=batch_dict['rois'], cls_preds=rcnn_cls, box_preds=rcnn_reg
             )
             batch_dict['batch_cls_preds'] = batch_cls_preds
             batch_dict['batch_box_preds'] = batch_box_preds
             batch_dict['cls_preds_normalized'] = False
-        else:
+        if self.training or self.print_loss_when_eval:
             targets_dict['rcnn_cls'] = rcnn_cls
             targets_dict['rcnn_reg'] = rcnn_reg
 

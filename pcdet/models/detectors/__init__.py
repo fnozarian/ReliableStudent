@@ -3,6 +3,7 @@ from .PartA2_net import PartA2Net
 from .point_rcnn import PointRCNN
 from .pointpillar import PointPillar
 from .pv_rcnn import PVRCNN
+from .pv_rcnn_ssl import PVRCNN_SSL
 from .second_net import SECONDNet
 
 __all__ = {
@@ -10,6 +11,7 @@ __all__ = {
     'SECONDNet': SECONDNet,
     'PartA2Net': PartA2Net,
     'PVRCNN': PVRCNN,
+    'PVRCNN_SSL': PVRCNN_SSL,
     'PointPillar': PointPillar,
     'PointRCNN': PointRCNN
 }

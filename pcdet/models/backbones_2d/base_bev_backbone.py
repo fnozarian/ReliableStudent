@@ -85,6 +85,7 @@ class BaseBEVBackbone(nn.Module):
                 spatial_features
         Returns:
         """
+
         spatial_features = data_dict['spatial_features']
         ups = []
         ret_dict = {}
@@ -95,7 +96,8 @@ class BaseBEVBackbone(nn.Module):
             stride = int(spatial_features.shape[2] / x.shape[2])
             ret_dict['spatial_features_%dx' % stride] = x
             if len(self.deblocks) > 0:
-                ups.append(self.deblocks[i](x))
+                y = self.deblocks[i](x)
+                ups.append(y)
             else:
                 ups.append(x)
 
@@ -108,5 +110,4 @@ class BaseBEVBackbone(nn.Module):
             x = self.deblocks[-1](x)
 
         data_dict['spatial_features_2d'] = x
-
         return data_dict

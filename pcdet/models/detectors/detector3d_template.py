@@ -165,7 +165,7 @@ class Detector3DTemplate(nn.Module):
     def forward(self, **kwargs):
         raise NotImplementedError
 
-    def post_processing(self, batch_dict):
+    def post_processing(self, batch_dict, no_recall_dict=False, override_thresh=None, no_nms=False):
         """
         Args:
             batch_dict:
@@ -201,7 +201,7 @@ class Detector3DTemplate(nn.Module):
                 cls_preds = batch_dict['batch_cls_preds'][batch_mask]
 
                 src_cls_preds = cls_preds
-                assert cls_preds.shape[1] in [1, self.num_class]
+                assert cls_preds.shape[1] in [1, self.num_class]  # 1 for pvrcnn
 
                 if not batch_dict['cls_preds_normalized']:
                     cls_preds = torch.sigmoid(cls_preds)
@@ -226,7 +226,7 @@ class Detector3DTemplate(nn.Module):
                     cur_pred_scores, cur_pred_labels, cur_pred_boxes = model_nms_utils.multi_classes_nms(
                         cls_scores=cur_cls_preds, box_preds=cur_box_preds,
                         nms_config=post_process_cfg.NMS_CONFIG,
-                        score_thresh=post_process_cfg.SCORE_THRESH
+                        score_thresh=post_process_cfg.SCORE_THRESH if override_thresh is None else override_thresh
                     )
                     cur_pred_labels = cur_label_mapping[cur_pred_labels]
                     pred_scores.append(cur_pred_scores)
@@ -242,13 +242,27 @@ class Detector3DTemplate(nn.Module):
                 if batch_dict.get('has_class_labels', False):
                     label_key = 'roi_labels' if 'roi_labels' in batch_dict else 'batch_pred_labels'
                     label_preds = batch_dict[label_key][index]
+                    if self.training:
+                        sem_scores = batch_dict['roi_scores'][index]
                 else:
                     label_preds = label_preds + 1
-                selected, selected_scores = model_nms_utils.class_agnostic_nms(
-                    box_scores=cls_preds, box_preds=box_preds,
-                    nms_config=post_process_cfg.NMS_CONFIG,
-                    score_thresh=post_process_cfg.SCORE_THRESH
-                )
+
+                if no_nms:
+                    selected = torch.arange(len(cls_preds), device=cls_preds.device)
+                    selected_scores = cls_preds
+                else:
+                    if False:
+                        selected, selected_scores = model_nms_utils.class_agnostic_nms(
+                            box_scores=torch.sigmoid(sem_scores), box_preds=box_preds,
+                            nms_config=post_process_cfg.NMS_CONFIG,
+                            score_thresh=post_process_cfg.SCORE_THRESH
+                        )
+                    else:
+                        selected, selected_scores = model_nms_utils.class_agnostic_nms(
+                            box_scores=cls_preds, box_preds=box_preds,
+                            nms_config=post_process_cfg.NMS_CONFIG,
+                            score_thresh=post_process_cfg.SCORE_THRESH
+                        )
 
                 if post_process_cfg.OUTPUT_RAW_SCORE:
                     max_cls_preds, _ = torch.max(src_cls_preds, dim=-1)
@@ -258,17 +272,23 @@ class Detector3DTemplate(nn.Module):
                 final_labels = label_preds[selected]
                 final_boxes = box_preds[selected]
 
-            recall_dict = self.generate_recall_record(
-                box_preds=final_boxes if 'rois' not in batch_dict else src_box_preds,
-                recall_dict=recall_dict, batch_index=index, data_dict=batch_dict,
-                thresh_list=post_process_cfg.RECALL_THRESH_LIST
-            )
+                if self.training:
+                    final_sem_scores = torch.sigmoid(sem_scores[selected])
+
+            if not no_recall_dict:
+                recall_dict = self.generate_recall_record(
+                    box_preds=final_boxes if 'rois' not in batch_dict else src_box_preds,
+                    recall_dict=recall_dict, batch_index=index, data_dict=batch_dict,
+                    thresh_list=post_process_cfg.RECALL_THRESH_LIST
+                )
 
             record_dict = {
                 'pred_boxes': final_boxes,
                 'pred_scores': final_scores,
-                'pred_labels': final_labels
+                'pred_labels': final_labels,
             }
+            if self.training:
+                record_dict['pred_sem_scores'] = final_sem_scores
             pred_dicts.append(record_dict)
 
         return pred_dicts, recall_dict
@@ -289,6 +309,7 @@ class Detector3DTemplate(nn.Module):
 
         cur_gt = gt_boxes
         k = cur_gt.__len__() - 1
+
         while k > 0 and cur_gt[k].sum() == 0:
             k -= 1
         cur_gt = cur_gt[:k + 1]
@@ -375,3 +396,4 @@ class Detector3DTemplate(nn.Module):
         logger.info('==> Done')
 
         return it, epoch
+
