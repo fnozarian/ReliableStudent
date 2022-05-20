@@ -89,8 +89,6 @@ class DataAugmentor(object):
         data_dict['scale'] = noise_scale
         return data_dict
 
-    def forward(self, data_dict, no_db_sample=False):
-
     def random_image_flip(self, data_dict=None, config=None):
         if data_dict is None:
             return partial(self.random_image_flip, config=config)
