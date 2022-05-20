@@ -146,6 +146,13 @@ class RoIHeadTemplate(nn.Module):
         gt_boxes3d_ct = forward_ret_dict['gt_of_rois'][..., 0:code_size]
         gt_of_rois_src = forward_ret_dict['gt_of_rois_src'][..., 0:code_size].view(-1, code_size)
         rcnn_reg = forward_ret_dict['rcnn_reg']  # (rcnn_batch_size, C)
+        
+        enforce_consistency=0
+        if 'teacher_raw_rcnn_reg' in forward_ret_dict:
+            enforce_consistency=1
+            teacher_rcnn_reg = forward_ret_dict['teacher_raw_rcnn_reg']  # (rcnn_batch_size, C)
+
+
         roi_boxes3d = forward_ret_dict['rois']
         rcnn_batch_size = gt_boxes3d_ct.view(-1, code_size).shape[0]
 
@@ -229,6 +236,11 @@ class RoIHeadTemplate(nn.Module):
         loss_cfgs = self.model_cfg.LOSS_CONFIG
         rcnn_cls = forward_ret_dict['rcnn_cls']
         rcnn_cls_labels = forward_ret_dict['rcnn_cls_labels'].view(-1)
+        enforce_consistency=0
+        if 'teacher_raw_rcnn_cls' in forward_ret_dict:
+            enforce_consistency=1
+            teacher_rcnn_cls = forward_ret_dict['teacher_raw_rcnn_cls']  
+
         if loss_cfgs.CLS_LOSS == 'BinaryCrossEntropy':
             rcnn_cls_flat = rcnn_cls.view(-1)
             batch_loss_cls = F.binary_cross_entropy(torch.sigmoid(rcnn_cls_flat), rcnn_cls_labels.float(), reduction='none')

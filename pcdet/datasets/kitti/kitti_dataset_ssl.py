@@ -505,7 +505,7 @@ class KittiDatasetSSL(DatasetTemplate):
         if self.training:
             assert 'gt_boxes' in data_dict, 'gt_boxes should be provided for training'
             gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
-            ## Update data_augmentor from ST3D
+
             data_dict = self.data_augmentor.forward(
                 data_dict={
                     **data_dict,
@@ -516,19 +516,12 @@ class KittiDatasetSSL(DatasetTemplate):
             # print(data_dict)
             points_ema = data_dict['points'].copy()
             gt_boxes_ema = data_dict['gt_boxes'].copy()
-
-
-            ### Here augmentation is fixed while SESS make them random, which is better in term of generalization
-            ### This augmentation need to be updated with ST3D-ROS and SESS (Ablation)
             gt_boxes_ema, points_ema, _ = global_scaling(gt_boxes_ema, points_ema, [0, 2],
                                                          scale_=1/data_dict['scale'])
             gt_boxes_ema, points_ema, _ = global_rotation(gt_boxes_ema, points_ema, [-1, 1],
                                                           rot_angle_=-data_dict['rot_angle'])
             gt_boxes_ema, points_ema, _ = random_flip_along_x(gt_boxes_ema, points_ema, enable_=data_dict['flip_x'])
             gt_boxes_ema, points_ema, _ = random_flip_along_y(gt_boxes_ema, points_ema, enable_=data_dict['flip_y'])
-            
-            
-            
             data_dict['points_ema'] = points_ema
             data_dict['gt_boxes_ema'] = gt_boxes_ema
 
@@ -548,17 +541,12 @@ class KittiDatasetSSL(DatasetTemplate):
 
         # print((data_dict['points'] ** 2).sum(), (data_dict['points_ema'] ** 2).sum()*(data_dict['scale']**2))
         if self.training:
-            # save orig points and GT-boxes
             points = data_dict['points'].copy()
             gt_boxes = data_dict['gt_boxes'].copy()
-            
-            # overwrite augmented data (points and GT-boxes)
             # points_ema = data_dict['points_ema'].copy()
             data_dict['points'] = data_dict['points_ema']
             data_dict['gt_boxes'] = data_dict['gt_boxes_ema']
-        # get point feature reps (augmented data)
         data_dict = self.point_feature_encoder.forward(data_dict)
-        # get voxel feature reps (augmented data)
         data_dict = self.data_processor.forward(
             data_dict=data_dict
         )
@@ -575,9 +563,7 @@ class KittiDatasetSSL(DatasetTemplate):
             data_dict.pop('voxels', None)
             data_dict.pop('voxel_coords', None)
             data_dict.pop('voxel_num_points', None)
-            # get point feature reps (orig data)
             data_dict = self.point_feature_encoder.forward(data_dict)
-            # get voxel feature reps (orig data)
             data_dict = self.data_processor.forward(
                 data_dict=data_dict
             )
@@ -593,8 +579,7 @@ class KittiDatasetSSL(DatasetTemplate):
         #    return self.__getitem__(new_index)
 
         data_dict.pop('gt_names', None)
-        # ALL EMA entries correspond to strongly augmneted data (points, GT-Boxes, points and voxel feature reps)
-        # That would be feeded to student model
+
         return data_dict
 
 

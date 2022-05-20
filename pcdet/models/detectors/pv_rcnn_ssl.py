@@ -16,15 +16,15 @@ class PVRCNN_SSL(Detector3DTemplate):
         # something changes so need deep copy
         model_cfg_copy = copy.deepcopy(model_cfg)
         dataset_copy = copy.deepcopy(dataset)
-        self.pv_rcnn = PVRCNN(model_cfg=model_cfg, num_class=num_class, dataset=dataset) # teacher
-        self.pv_rcnn_ema = PVRCNN(model_cfg=model_cfg_copy, num_class=num_class, dataset=dataset_copy) #student
+        self.pv_rcnn = PVRCNN(model_cfg=model_cfg, num_class=num_class, dataset=dataset) 
+        self.pv_rcnn_ema = PVRCNN(model_cfg=model_cfg_copy, num_class=num_class, dataset=dataset_copy) 
         
-        # break gradient graph for student, we need to change it for student
+        # break gradient graph for ema
         for param in self.pv_rcnn_ema.parameters():
             param.detach_()
         
-        self.teacher_head=self.pv_rcnn_ema.module_list[-1]
         self.student_head=self.pv_rcnn.module_list[-1]
+        self.teacher_head=self.pv_rcnn_ema.module_list[-1]
 
         self.add_module('pv_rcnn', self.pv_rcnn)
         self.add_module('pv_rcnn_ema', self.pv_rcnn_ema)
@@ -62,14 +62,14 @@ class PVRCNN_SSL(Detector3DTemplate):
                 # self.pv_rcnn_ema.eval()  # Important! must be in train mode
                                
                 
-                #! Actual teacher's backbone features + ROI head
+                #! weekely aug complete pipeline (backbone features + proposal generation ...)
                 for cur_module in self.pv_rcnn_ema.module_list:
                     try:
                         batch_dict_ema = cur_module(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
                     except:
                         batch_dict_ema = cur_module(batch_dict_ema)
                     
-                #! Augmented student's backbone features
+                #! str. aug backbone features
                 for cur_module in self.pv_rcnn.module_list[:-1]:
                     batch_dict = cur_module(batch_dict)
 
@@ -81,13 +81,15 @@ class PVRCNN_SSL(Detector3DTemplate):
                 
                 #batch_dict= self.teacher_head.proposal_layer(batch_dict, nms_config=self.model_cfg.ROI_HEAD.NMS_CONFIG['TEST']) # PL generation
                 
-                #batch_dict = self.teacher_head(batch_dict) 
+                #batch_dict_ema = self.teacher_head(batch_dict_ema,disable_gt_roi_when_pseudo_labeling=True) 
                 
                 batch_dict['teacher_rcnn_boxes']=batch_dict_ema['rois'] #batch_dict['batch_box_preds']
                 batch_dict['teacher_rcnn_cls']=batch_dict_ema['roi_scores'] #batch_dict['batch_cls_preds']
-                batch_dict['teacher_rcnn_labels']=batch_dict_ema['roi_labels'] #1+index of torch.max(batch_cls_preds)
+
+                batch_dict['teacher_raw_rcnn_cls']=batch_dict_ema['raw_rcnn_cls'] 
+                batch_dict['teacher_raw_rcnn_reg']=batch_dict_ema['raw_rcnn_cls'] 
                 
-                batch_dict_ema = self.student_head(batch_dict)
+                batch_dict = self.student_head(batch_dict)
 
 
 
