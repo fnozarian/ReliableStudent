@@ -1,3 +1,6 @@
+import torch
+import copy
+from pathlib import Path
 from collections import defaultdict
 from pathlib import Path
 
@@ -8,6 +11,10 @@ from ..utils import common_utils
 from .augmentor.data_augmentor import DataAugmentor
 from .processor.data_processor import DataProcessor
 from .processor.point_feature_encoder import PointFeatureEncoder
+from ..utils import common_utils, box_utils
+from ..ops.roiaware_pool3d import roiaware_pool3d_utils
+
+
 
 
 class DatasetTemplate(torch_data.Dataset):
@@ -121,6 +128,23 @@ class DatasetTemplate(torch_data.Dataset):
                 ...
         """
         if self.training:
+
+            # TODO(danish) ablation
+            if self.dataset_cfg.get('MIN_POINTS_OF_GT', None):
+                # filter gt_boxes without points
+                num_points_in_gt = data_dict.get('num_points_in_gt', None)
+                if num_points_in_gt is None:
+                    num_points_in_gt = roiaware_pool3d_utils.points_in_boxes_cpu(
+                        torch.from_numpy(data_dict['points'][:, :3]),
+                        torch.from_numpy(data_dict['gt_boxes'][:, :7])).numpy().sum(axis=1)
+
+                mask = (num_points_in_gt >= self.dataset_cfg.get('MIN_POINTS_OF_GT', 1))
+                data_dict['gt_boxes'] = data_dict['gt_boxes'][mask]
+                data_dict['gt_names'] = data_dict['gt_names'][mask]
+                if 'gt_classes' in data_dict:
+                    data_dict['gt_classes'] = data_dict['gt_classes'][mask]
+                    data_dict['gt_scores'] = data_dict['gt_scores'][mask]
+
             assert 'gt_boxes' in data_dict, 'gt_boxes should be provided for training'
             gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
 
