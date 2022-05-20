@@ -28,7 +28,7 @@ def write_version_to_file(version, target_file):
 
 
 if __name__ == '__main__':
-    version = '0.3.0+%s' % get_git_commit_number()
+    version = '0.5.2+%s' % get_git_commit_number()
     write_version_to_file(version, 'pcdet/version.py')
 
     setup(
@@ -37,18 +37,24 @@ if __name__ == '__main__':
         description='OpenPCDet is a general codebase for 3D object detection from point cloud',
         install_requires=[
             'numpy',
-            'torch>=1.1',
-            'spconv',
+            'llvmlite',
             'numba',
             'tensorboardX',
             'easydict',
-            'pyyaml'
+            'pyyaml',
+            'scikit-image',
+            'tqdm',
+            'SharedArray',
+            # 'spconv',  # spconv has different names depending on the cuda version
         ],
+
         author='Shaoshuai Shi',
         author_email='shaoshuaics@gmail.com',
         license='Apache License 2.0',
         packages=find_packages(exclude=['tools', 'data', 'output']),
-        cmdclass={'build_ext': BuildExtension},
+        cmdclass={
+            'build_ext': BuildExtension,
+        },
         ext_modules=[
             make_cuda_ext(
                 name='iou3d_nms_cuda',
@@ -89,6 +95,10 @@ if __name__ == '__main__':
                     'src/sampling_gpu.cu', 
                     'src/interpolate.cpp', 
                     'src/interpolate_gpu.cu',
+                    'src/voxel_query.cpp', 
+                    'src/voxel_query_gpu.cu',
+                    'src/vector_pool.cpp',
+                    'src/vector_pool_gpu.cu'
                 ],
             ),
             make_cuda_ext(

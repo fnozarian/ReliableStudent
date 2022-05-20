@@ -7,26 +7,17 @@ from .roi_head_template import RoIHeadTemplate
 
 class PVRCNNHead(RoIHeadTemplate):
     def __init__(self, input_channels, model_cfg, num_class=1,
-                 predict_boxes_when_training=True):
+                 predict_boxes_when_training=True, **kwargs):
         super().__init__(num_class=num_class, model_cfg=model_cfg,
                          predict_boxes_when_training=predict_boxes_when_training)
         self.model_cfg = model_cfg
 
-        mlps = self.model_cfg.ROI_GRID_POOL.MLPS
-        for k in range(len(mlps)):
-            mlps[k] = [input_channels] + mlps[k]
-
-        self.roi_grid_pool_layer = pointnet2_stack_modules.StackSAModuleMSG(
-            radii=self.model_cfg.ROI_GRID_POOL.POOL_RADIUS,
-            nsamples=self.model_cfg.ROI_GRID_POOL.NSAMPLE,
-            mlps=mlps,
-            use_xyz=True,
-            pool_method=self.model_cfg.ROI_GRID_POOL.POOL_METHOD,
+        self.roi_grid_pool_layer, num_c_out = pointnet2_stack_modules.build_local_aggregation_module(
+            input_channels=input_channels, config=self.model_cfg.ROI_GRID_POOL
         )
 
         GRID_SIZE = self.model_cfg.ROI_GRID_POOL.GRID_SIZE
-        c_out = sum([x[-1] for x in mlps])
-        pre_channel = GRID_SIZE * GRID_SIZE * GRID_SIZE * c_out
+        pre_channel = GRID_SIZE * GRID_SIZE * GRID_SIZE * num_c_out
 
         shared_fc_list = []
         for k in range(0, self.model_cfg.SHARED_FC.__len__()):

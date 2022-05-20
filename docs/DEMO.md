@@ -6,12 +6,15 @@ We suppose you already followed the [INSTALL.md](INSTALL.md) to install the `Ope
 
 1. Download the provided pretrained models as shown in the [README.md](../README.md). 
 
-2. Make sure you have already installed the `mayavi` visualization tools. If not, you could install it as follows:
+2. Make sure you have already installed the [`Open3D`](https://github.com/isl-org/Open3D) (faster) or `mayavi` visualization tools. 
+If not, you could install it as follows:
    ```
+   pip install open3d
+   # or 
    pip install mayavi
    ```
 
-3. Prepare you custom point cloud data (skip this step if you use the original KITTI data). 
+3. Prepare your custom point cloud data (skip this step if you use the original KITTI data). 
    * You need to transform the coordinate of your custom point cloud to 
 the unified normative coordinate of `OpenPCDet`, that is, x-axis points towards to front direction, 
 y-axis points towards to the left direction, and z-axis points towards to the top direction.
@@ -36,7 +39,7 @@ python demo.py --cfg_file cfgs/kitti_models/pv_rcnn.yaml \
     --ckpt pv_rcnn_8369.pth \
     --data_path ${POINT_CLOUD_DATA}
 ```
-Here `${POINT_CLOUD_DATA}` could be the following format: 
+Here `${POINT_CLOUD_DATA}` could be in any of the following format: 
 * Your transformed custom data with a single numpy file like `my_data.npy`.  
 * Your transformed custom data with a directory to test with multiple point cloud data.
 * The original KITTI `.bin` data within `data/kitti`, like `data/kitti/training/velodyne/000008.bin`.   

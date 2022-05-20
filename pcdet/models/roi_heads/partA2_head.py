@@ -1,14 +1,14 @@
 import numpy as np
-import spconv
 import torch
 import torch.nn as nn
 
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
+from ...utils.spconv_utils import spconv
 from .roi_head_template import RoIHeadTemplate
 
 
 class PartA2FCHead(RoIHeadTemplate):
-    def __init__(self, input_channels, model_cfg, num_class=1):
+    def __init__(self, input_channels, model_cfg, num_class=1, **kwargs):
         super().__init__(num_class=num_class, model_cfg=model_cfg)
         self.model_cfg = model_cfg
 
@@ -192,7 +192,7 @@ class PartA2FCHead(RoIHeadTemplate):
 
         part_features = pooled_part_features[sparse_idx[:, 0], sparse_idx[:, 1], sparse_idx[:, 2], sparse_idx[:, 3]]
         rpn_features = pooled_rpn_features[sparse_idx[:, 0], sparse_idx[:, 1], sparse_idx[:, 2], sparse_idx[:, 3]]
-        coords = sparse_idx.int()
+        coords = sparse_idx.int().contiguous()
         part_features = spconv.SparseConvTensor(part_features, coords, sparse_shape, batch_size_rcnn)
         rpn_features = spconv.SparseConvTensor(rpn_features, coords, sparse_shape, batch_size_rcnn)
 

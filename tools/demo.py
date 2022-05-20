@@ -1,8 +1,16 @@
 import argparse
 import glob
 from pathlib import Path
-print('before mayavi import')
-# import mayavi.mlab as mlab
+
+try:
+    import open3d
+    from visual_utils import open3d_vis_utils as V
+    OPEN3D_FLAG = True
+except:
+    import mayavi.mlab as mlab
+    from visual_utils import visualize_utils as V
+    OPEN3D_FLAG = False
+
 import numpy as np
 import torch
 import sys
@@ -53,19 +61,19 @@ def write_oriented_bbox(scene_bbox, out_filename):
         lengths = box[3:6]
         trns = np.eye(4)
         trns[0:3, 3] = ctr
-        trns[3,3] = 1.0            
+        trns[3,3] = 1.0
         trns[0:3,0:3] = heading2rotmat(box[6])
         box_trimesh_fmt = trimesh.creation.box(lengths, trns)
         return box_trimesh_fmt
 
     scene = trimesh.scene.Scene()
     for box in scene_bbox:
-        scene.add_geometry(convert_oriented_box_to_trimesh_fmt(box))        
-    
+        scene.add_geometry(convert_oriented_box_to_trimesh_fmt(box))
+
     mesh_list = trimesh.util.concatenate(scene.dump())
-    # save to ply file    
+    # save to ply file
     trimesh.io.export.export_mesh(mesh_list, out_filename, file_type='ply')
-    
+
     return
 
 
@@ -163,6 +171,10 @@ def main():
             #     points=data_dict['points'][:, 1:], ref_boxes=pred_dicts[0]['pred_boxes'],
             #     ref_scores=pred_dicts[0]['pred_scores'], ref_labels=pred_dicts[0]['pred_labels']
             # )
+
+            if not OPEN3D_FLAG:
+                mlab.show(stop=True)
+
             write_ply(data_dict['points'][:, 1:].cpu().numpy(), '../demo/pc.ply')
             write_oriented_bbox(pred_dicts[0]['pred_boxes'].cpu().numpy(), '../demo/pred_bbox_ours.ply')
 

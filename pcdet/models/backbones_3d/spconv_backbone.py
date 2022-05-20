@@ -1,7 +1,8 @@
 from functools import partial
 
-import spconv
 import torch.nn as nn
+
+from ...utils.spconv_utils import replace_feature, spconv
 
 
 def post_act_block(in_channels, out_channels, kernel_size, indice_key=None, stride=1, padding=0,
@@ -50,17 +51,17 @@ class SparseBasicBlock(spconv.SparseModule):
         identity = x
 
         out = self.conv1(x)
-        out.features = self.bn1(out.features)
-        out.features = self.relu(out.features)
+        out = replace_feature(out, self.bn1(out.features))
+        out = replace_feature(out, self.relu(out.features))
 
         out = self.conv2(out)
-        out.features = self.bn2(out.features)
+        out = replace_feature(out, self.bn2(out.features))
 
         if self.downsample is not None:
             identity = self.downsample(x)
 
-        out.features += identity.features
-        out.features = self.relu(out.features)
+        out = replace_feature(out, out.features + identity.features)
+        out = replace_feature(out, self.relu(out.features))
 
         return out
 
@@ -115,6 +116,14 @@ class VoxelBackBone8x(nn.Module):
             nn.ReLU(),
         )
         self.num_point_features = 128
+        self.backbone_channels = {
+            'x_conv1': 16,
+            'x_conv2': 32,
+            'x_conv3': 64,
+            'x_conv4': 64
+        }
+
+
 
     def forward(self, batch_dict):
         """
@@ -157,6 +166,14 @@ class VoxelBackBone8x(nn.Module):
                 'x_conv2': x_conv2,
                 'x_conv3': x_conv3,
                 'x_conv4': x_conv4,
+            }
+        })
+        batch_dict.update({
+            'multi_scale_3d_strides': {
+                'x_conv1': 1,
+                'x_conv2': 2,
+                'x_conv3': 4,
+                'x_conv4': 8,
             }
         })
 
@@ -214,6 +231,12 @@ class VoxelResBackBone8x(nn.Module):
             nn.ReLU(),
         )
         self.num_point_features = 128
+        self.backbone_channels = {
+            'x_conv1': 16,
+            'x_conv2': 32,
+            'x_conv3': 64,
+            'x_conv4': 128
+        }
 
     def forward(self, batch_dict):
         """
@@ -258,4 +281,13 @@ class VoxelResBackBone8x(nn.Module):
             }
         })
 
+        batch_dict.update({
+            'multi_scale_3d_strides': {
+                'x_conv1': 1,
+                'x_conv2': 2,
+                'x_conv3': 4,
+                'x_conv4': 8,
+            }
+        })
+        
         return batch_dict

@@ -12,6 +12,11 @@ def transform_annotations_to_kitti_format(annos, map_name_to_kitti=None, info_wi
 
     """
     for anno in annos:
+        # For lyft and nuscenes, different anno key in info
+        if 'name' not in anno:
+            anno['name'] = anno['gt_names']
+            anno.pop('gt_names')
+
         for k in range(anno['name'].shape[0]):
             anno['name'][k] = map_name_to_kitti[anno['name'][k]]
 
@@ -42,3 +47,20 @@ def transform_annotations_to_kitti_format(annos, map_name_to_kitti=None, info_wi
             anno['rotation_y'] = anno['alpha'] = np.zeros(0)
 
     return annos
+
+
+def calib_to_matricies(calib):
+    """
+    Converts calibration object to transformation matricies
+    Args:
+        calib: calibration.Calibration, Calibration object
+    Returns
+        V2R: (4, 4), Lidar to rectified camera transformation matrix
+        P2: (3, 4), Camera projection matrix
+    """
+    V2C = np.vstack((calib.V2C, np.array([0, 0, 0, 1], dtype=np.float32)))  # (4, 4)
+    R0 = np.hstack((calib.R0, np.zeros((3, 1), dtype=np.float32)))  # (3, 4)
+    R0 = np.vstack((R0, np.array([0, 0, 0, 1], dtype=np.float32)))  # (4, 4)
+    V2R = R0 @ V2C
+    P2 = calib.P2
+    return V2R, P2

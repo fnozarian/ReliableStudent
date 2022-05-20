@@ -75,7 +75,7 @@ class PointNet2MSG(nn.Module):
 
         assert xyz_batch_cnt.min() == xyz_batch_cnt.max()
         xyz = xyz.view(batch_size, -1, 3)
-        features = features.view(batch_size, -1, features.shape[-1]).permute(0, 2, 1) if features is not None else None
+        features = features.view(batch_size, -1, features.shape[-1]).permute(0, 2, 1).contiguous() if features is not None else None
 
         l_xyz, l_features = [xyz], [features]
         for i in range(len(self.SA_modules)):
@@ -174,7 +174,7 @@ class PointNet2Backbone(nn.Module):
                 else:
                     last_num_points = self.num_points_each_layer[i - 1]
                     cur_xyz = l_xyz[-1][k * last_num_points: (k + 1) * last_num_points]
-                cur_pt_idxs = pointnet2_utils_stack.furthest_point_sample(
+                cur_pt_idxs = pointnet2_utils_stack.farthest_point_sample(
                     cur_xyz[None, :, :].contiguous(), self.num_points_each_layer[i]
                 ).long()[0]
                 if cur_xyz.shape[0] < self.num_points_each_layer[i]:
