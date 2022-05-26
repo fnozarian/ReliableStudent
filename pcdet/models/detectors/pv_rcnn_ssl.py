@@ -188,8 +188,15 @@ class PVRCNN_SSL(Detector3DTemplate):
                         pseudo_accs.append(ones)
                         pseudo_fgs.append(ones)
 
+            batch_dict['point_features_ema'] = batch_dict_ema['point_features']
+            batch_dict['point_coords_ema'] = batch_dict_ema['point_coords']
+            batch_dict['point_cls_scores_ema'] = batch_dict_ema['point_cls_scores']
+
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
+            # using teacher to evaluate student's bg/fg proposals through its rcnn head
+            with torch.no_grad():
+                self.pv_rcnn_ema.roi_head.forward(batch_dict, disable_gt_roi_when_pseudo_labeling=True)
 
             disp_dict = {}
             loss_rpn_cls, loss_rpn_box, tb_dict = self.pv_rcnn.dense_head.get_loss(scalar=False)

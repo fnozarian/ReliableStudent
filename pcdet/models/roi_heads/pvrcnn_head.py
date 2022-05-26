@@ -79,11 +79,17 @@ class PVRCNNHead(RoIHeadTemplate):
 
         """
         batch_size = batch_dict['batch_size']
+        # using student's rois in soft-teacher
         rois = batch_dict['rois']
-        point_coords = batch_dict['point_coords']
-        point_features = batch_dict['point_features']
+        # using teacher's features in soft-teacher
+        point_coords = batch_dict["point_coords_ema"] if "point_coords_ema" in batch_dict.keys() else batch_dict[
+            "point_coords"]
+        point_features = batch_dict["point_features_ema"] if "point_features_ema" in batch_dict.keys() else batch_dict[
+            "point_features"]
+        point_cls_scores = batch_dict["point_cls_scores_ema"] if "point_cls_scores_ema" in batch_dict.keys() else batch_dict[
+            "point_cls_scores"]
 
-        point_features = point_features * batch_dict['point_cls_scores'].view(-1, 1)
+        point_features = point_features * point_cls_scores.view(-1, 1)
 
         global_roi_grid_points, local_roi_grid_points = self.get_global_grid_points_of_roi(
             rois, grid_size=self.model_cfg.ROI_GRID_POOL.GRID_SIZE
@@ -169,6 +175,7 @@ class PVRCNNHead(RoIHeadTemplate):
             batch_cls_preds, batch_box_preds = self.generate_predicted_boxes(
                 batch_size=batch_dict['batch_size'], rois=batch_dict['rois'], cls_preds=rcnn_cls, box_preds=rcnn_reg
             )
+            # note that the rpn batch_cls_preds and batch_box_preds are being overridden here by rcnn preds
             batch_dict['batch_cls_preds'] = batch_cls_preds
             batch_dict['batch_box_preds'] = batch_box_preds
             batch_dict['cls_preds_normalized'] = False
