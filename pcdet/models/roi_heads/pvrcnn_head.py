@@ -135,16 +135,19 @@ class PVRCNNHead(RoIHeadTemplate):
                           - (local_roi_size.unsqueeze(dim=1) / 2)  # (B, 6x6x6, 3)
         return roi_grid_points
 
-    def forward(self, batch_dict):
+    def forward(self, batch_dict, disable_gt_roi_when_pseudo_labeling=False):
         """
         :param input_data: input dict
         :return:
         """
 
-        targets_dict = self.proposal_layer(
-            batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training else 'TEST']
-        )
-        if self.training:
+        # use test-time nms for pseudo label generation
+        nms_mode = self.model_cfg.NMS_CONFIG['TRAIN' if self.training and not disable_gt_roi_when_pseudo_labeling else 'TEST']
+        # proposal layer doesn't continue if the rois are already in the batch_dict
+        # therefore, before calling pvrcnn_head.forward we inject student's proposal in batch_dict
+        targets_dict = self.proposal_layer(batch_dict, nms_config=nms_mode)
+        # should not use gt_roi for pseudo label generation
+        if (self.training or self.print_loss_when_eval) and not disable_gt_roi_when_pseudo_labeling:
             targets_dict = self.assign_targets(batch_dict)
             batch_dict['rois'] = targets_dict['rois']
             batch_dict['roi_scores'] = targets_dict['roi_scores']
@@ -162,25 +165,16 @@ class PVRCNNHead(RoIHeadTemplate):
         rcnn_cls = self.cls_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, 1 or 2)
         rcnn_reg = self.reg_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, C)
 
-        batch_dict['raw_rcnn_cls'] = rcnn_cls
-        batch_dict['raw_rcnn_reg'] = rcnn_reg
-
-
-        if not self.training:
+        if not self.training or self.predict_boxes_when_training:
             batch_cls_preds, batch_box_preds = self.generate_predicted_boxes(
                 batch_size=batch_dict['batch_size'], rois=batch_dict['rois'], cls_preds=rcnn_cls, box_preds=rcnn_reg
             )
             batch_dict['batch_cls_preds'] = batch_cls_preds
             batch_dict['batch_box_preds'] = batch_box_preds
             batch_dict['cls_preds_normalized'] = False
-
         if self.training or self.print_loss_when_eval:
             targets_dict['rcnn_cls'] = rcnn_cls
             targets_dict['rcnn_reg'] = rcnn_reg
-            if 'teacher_raw_rcnn_cls' in batch_dict:
-                targets_dict['teacher_raw_rcnn_cls'] = batch_dict['teacher_raw_rcnn_cls']
-            if 'teacher_raw_rcnn_reg' in batch_dict:
-                targets_dict['teacher_raw_rcnn_reg'] = batch_dict['teacher_raw_rcnn_reg']
 
             self.forward_ret_dict = targets_dict
 

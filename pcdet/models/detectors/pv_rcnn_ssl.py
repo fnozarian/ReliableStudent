@@ -16,19 +16,13 @@ class PVRCNN_SSL(Detector3DTemplate):
         # something changes so need deep copy
         model_cfg_copy = copy.deepcopy(model_cfg)
         dataset_copy = copy.deepcopy(dataset)
-        self.pv_rcnn = PVRCNN(model_cfg=model_cfg, num_class=num_class, dataset=dataset) 
-        self.pv_rcnn_ema = PVRCNN(model_cfg=model_cfg_copy, num_class=num_class, dataset=dataset_copy) 
-        
-        # break gradient graph for ema
+        self.pv_rcnn = PVRCNN(model_cfg=model_cfg, num_class=num_class, dataset=dataset)
+
+        self.pv_rcnn_ema = PVRCNN(model_cfg=model_cfg_copy, num_class=num_class, dataset=dataset_copy)
         for param in self.pv_rcnn_ema.parameters():
             param.detach_()
-        
-        self.student_head=self.pv_rcnn.module_list[-1]
-        self.teacher_head=self.pv_rcnn_ema.module_list[-1]
-
         self.add_module('pv_rcnn', self.pv_rcnn)
         self.add_module('pv_rcnn_ema', self.pv_rcnn_ema)
-
 
         # self.module_list = self.build_networks()
         # self.module_list_ema = self.build_networks()
@@ -55,81 +49,14 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict_ema[k[:-4]] = batch_dict[k]
                 else:
                     batch_dict_ema[k] = batch_dict[k]
-            
-           #! disable_gt_roi_when_pseudo_labeling is FALSE for teacher
 
             with torch.no_grad():
                 # self.pv_rcnn_ema.eval()  # Important! must be in train mode
-                               
-                
-                #! weekely aug complete pipeline (backbone features + proposal generation ...)
                 for cur_module in self.pv_rcnn_ema.module_list:
                     try:
                         batch_dict_ema = cur_module(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
                     except:
                         batch_dict_ema = cur_module(batch_dict_ema)
-                    
-                #! str. aug backbone features
-                for cur_module in self.pv_rcnn.module_list[:-1]:
-                    batch_dict = cur_module(batch_dict)
-
-                
-                
-                #! Already we have Generated object proposals for teacher and student,  
-                # data_dict['batch_cls_preds'] data_dict['batch_box_preds'] from anchor_head_single->forward
-                # Next: keeps the top-N proposals ranked by iou/cls/cls+iou scores (ablations).
-                
-                #batch_dict= self.teacher_head.proposal_layer(batch_dict, nms_config=self.model_cfg.ROI_HEAD.NMS_CONFIG['TEST']) # PL generation
-                
-                #batch_dict_ema = self.teacher_head(batch_dict_ema,disable_gt_roi_when_pseudo_labeling=True) 
-                
-                batch_dict['teacher_rcnn_boxes']=batch_dict_ema['rois'] #batch_dict['batch_box_preds']
-                batch_dict['teacher_rcnn_cls']=batch_dict_ema['roi_scores'] #batch_dict['batch_cls_preds']
-
-                batch_dict['teacher_raw_rcnn_cls']=batch_dict_ema['raw_rcnn_cls'] 
-                batch_dict['teacher_raw_rcnn_reg']=batch_dict_ema['raw_rcnn_cls'] 
-                
-                batch_dict = self.student_head(batch_dict)
-
-
-
-
-
-
-                # ##---------------------------------------------
-                
-                # batch_dict_2= self.student_head(batch_dict, disable_gt_roi_when_pseudo_labeling=True)
-                # batch_dict_ema_1 = self.teacher_head(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
-                # batch_dict_ema_2 = self.student_head(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
-                
-                
-                
-
-                # #! cls score on strong augmented data from teacher head
-                # t_roi_cls_ema, t_roi_reg_ema =  batch_dict_ema_1['rcnn_cls'],batch_dict_ema_1['rcnn_reg']
-                # t_batch_cls_preds_ema,t_batch_box_preds_ema = batch_dict_ema_1['batch_cls_preds'],batch_dict_ema_1['batch_box_preds'] # proposals
-                
-                # #! cls score on strong augmented data from student head
-                # s_roi_cls_ema, s_roi_reg_ema =  batch_dict_ema_2['rcnn_cls'],batch_dict_ema_2['rcnn_reg']
-                # s_batch_cls_preds_ema,s_batch_box_preds_ema = batch_dict_ema_2['batch_cls_preds'],batch_dict_ema_2['batch_box_preds'] # proposals
-
-                # #! cls score on weak augmented data from teacher head
-                # t_roi_cls, t_roi_reg, shared_features =  batch_dict_1['rcnn_cls'],batch_dict_1['rcnn_reg'],batch_dict_ema['shared_features']
-                # t_batch_cls_preds,t_batch_box_preds = batch_dict_1['batch_cls_preds'],batch_dict_1['batch_box_preds'] # proposals
-
-                # #! cls score on weak augmented data from student head
-                # s_roi_cls, s_roi_reg =  batch_dict_2['rcnn_cls'],batch_dict_2['rcnn_reg']
-                # s_batch_cls_preds,s_batch_box_preds = batch_dict_2['batch_cls_preds'],batch_dict_2['batch_box_preds'] # proposals                
-
-
-                
-                # # compute_uncertainty_with_aug
-                # augmented_box_preds, augmented_cls_preds = self.get_augmented_bboxes(batch_dict_1, t_batch_cls_preds,t_batch_box_preds)
-                
-
-                # batch_dict_ema_1 = self.teacher_head(batch_dict_ema,None, augmented_box_preds, augmented_cls_preds)
-
-                #batch_dict = self.pv_rcnn.module_list[-1](batch_dict)
                 pred_dicts, recall_dicts = self.pv_rcnn_ema.post_processing(batch_dict_ema,
                                                                             no_recall_dict=True, override_thresh=0.0, no_nms=self.no_nms)
 
@@ -311,8 +238,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             }
             return ret_dict, tb_dict_, disp_dict
 
-        else: # teacher inference
-            
+        else:
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
 
@@ -336,29 +262,6 @@ class PVRCNN_SSL(Detector3DTemplate):
         alpha = min(1 - 1 / (self.global_step + 1), alpha)
         for ema_param, param in zip(self.pv_rcnn_ema.parameters(), self.pv_rcnn.parameters()):
             ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
-    
-
-
-    def get_augmented_bboxes(self, batch_dict, batch_cls_preds,batch_box_preds):
-        ' keep same bacth size'
-        augmented_box_preds=batch_box_preds
-        augmented_box_preds = torch.cat(
-            (random_flip_along_x_bbox(batch_box_preds, batch_dict['flip_x']),
-            random_flip_along_y_bbox(batch_box_preds, batch_dict['flip_y']),
-            global_rotation_bbox(batch_box_preds, batch_dict['rot_angle']),
-            global_scaling_bbox(batch_box_preds, batch_dict['scale'])), dim= 1)
-        
-        augmented_cls_preds= batch_cls_preds.repeat(1,4,1)
-
-        return augmented_box_preds, augmented_cls_preds
-    
-
-    def freeze(self, model_ref: str):
-        assert model_ref in self.submodules
-        model = getattr(self, model_ref)
-        model.eval()
-        for param in model.parameters():
-            param.requires_grad = False
 
     def load_params_from_file(self, filename, logger, to_cpu=False):
         if not os.path.isfile(filename):
