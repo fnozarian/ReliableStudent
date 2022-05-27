@@ -188,16 +188,30 @@ class PVRCNN_SSL(Detector3DTemplate):
                         pseudo_accs.append(ones)
                         pseudo_fgs.append(ones)
 
-            batch_dict['point_features_ema'] = batch_dict_ema['point_features']
-            batch_dict['point_coords_ema'] = batch_dict_ema['point_coords']
-            batch_dict['point_cls_scores_ema'] = batch_dict_ema['point_cls_scores']
 
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
             # using teacher to evaluate student's bg/fg proposals through its rcnn head
             with torch.no_grad():
-                self.pv_rcnn_ema.roi_head.forward(batch_dict, disable_gt_roi_when_pseudo_labeling=True)
+                # batch_dict_std = copy.deepcopy(batch_dict) # doesn't work
+                batch_dict_std = {}
+                batch_dict_std['rois'] = batch_dict['rois'].data.clone()
+                batch_dict_std['roi_scores'] = batch_dict['roi_scores'].data.clone()
+                batch_dict_std['roi_labels'] = batch_dict['roi_labels'].data.clone()
+                batch_dict_std['has_class_labels'] = batch_dict['has_class_labels']
+                batch_dict_std['batch_size'] = batch_dict['batch_size']
 
+                # TODO(farzad) Reverse student's augmentation of rois to align with teacher's rois
+
+                batch_dict_std['point_features'] = batch_dict_ema['point_features'].data.clone()
+                batch_dict_std['point_coords'] = batch_dict_ema['point_coords'].data.clone()
+                batch_dict_std['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
+
+                self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
+                                                  disable_gt_roi_when_pseudo_labeling=True)
+
+                pred_dicts_std, recall_dicts_std = self.pv_rcnn_ema.post_processing(batch_dict_std,
+                                                                            no_recall_dict=True, no_nms=True)
             disp_dict = {}
             loss_rpn_cls, loss_rpn_box, tb_dict = self.pv_rcnn.dense_head.get_loss(scalar=False)
             loss_point, tb_dict = self.pv_rcnn.point_head.get_loss(tb_dict, scalar=False)

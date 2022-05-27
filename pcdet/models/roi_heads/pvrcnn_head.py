@@ -79,15 +79,10 @@ class PVRCNNHead(RoIHeadTemplate):
 
         """
         batch_size = batch_dict['batch_size']
-        # using student's rois in soft-teacher
         rois = batch_dict['rois']
-        # using teacher's features in soft-teacher
-        point_coords = batch_dict["point_coords_ema"] if "point_coords_ema" in batch_dict.keys() else batch_dict[
-            "point_coords"]
-        point_features = batch_dict["point_features_ema"] if "point_features_ema" in batch_dict.keys() else batch_dict[
-            "point_features"]
-        point_cls_scores = batch_dict["point_cls_scores_ema"] if "point_cls_scores_ema" in batch_dict.keys() else batch_dict[
-            "point_cls_scores"]
+        point_coords = batch_dict["point_coords"]
+        point_features = batch_dict["point_features"]
+        point_cls_scores = batch_dict["point_cls_scores"]
 
         point_features = point_features * point_cls_scores.view(-1, 1)
 
