@@ -265,3 +265,100 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
+
+
+
+def reverse_augmentation(rois, batch_dict, is_points=False):
+    '''
+    Args:
+        rois: (B, roi_num, 7)
+    '''
+    flip_flag, rotate_flag, scale_flag = False, False, False
+    if 'world_flip_enabled' in batch_dict:
+        flip_flag = True
+        world_flip_enabled = batch_dict['world_flip_enabled']
+    if 'world_rotation' in batch_dict:
+        rotate_flag = True
+        world_rotation = batch_dict['world_rotation']
+    if 'world_scaling' in batch_dict:
+        scale_flag = True
+        world_scaling = batch_dict['world_scaling']
+    if 'world_shifts' in batch_dict:
+        shift_flag = True
+        raise NotImplementedError
+    if 'world_scaling_xyz' in batch_dict:
+        raise NotImplementedError
+
+    batch_size = rois.shape[0]
+
+    if is_points:
+        if scale_flag:
+            scale_factor = 1.0 / world_scaling
+            scale_factor = scale_factor.view(scale_factor.shape[0], 1, 1)
+            rois *= scale_factor
+    else:
+        assert len(rois.shape) == 3
+
+        for index in range(batch_size):
+            # flip
+            if flip_flag and world_flip_enabled[index] == 1:
+                rois[index, :, 1] = -rois[index, :, 1]
+                rois[index, :, 6] = -rois[index, :, 6]
+            # rotation
+            if rotate_flag:
+                rotation_angle = - world_rotation[index].item()
+                cur_rois = rois[index]
+                rois[index, :, 0:3] = rotate_points_along_z(cur_rois[np.newaxis, :, 0:3], np.array([rotation_angle]))[0]
+                rois[index, :, 6] += rotation_angle
+        # scale
+        if scale_flag:
+            scale_factor = 1.0 / world_scaling
+            scale_factor = scale_factor.view(scale_factor.shape[0], 1, 1)
+            rois[...,0:6] *= scale_factor
+
+    return rois
+
+def forward_augmentation(rois, batch_dict, is_points=False):
+    '''
+    Args:
+        rois: (B, roi_num, 7)
+    '''
+    flip_flag, rotate_flag, scale_flag = False, False, False
+    if 'world_flip_enabled' in batch_dict:
+        flip_flag = True
+        world_flip_enabled = batch_dict['world_flip_enabled']
+    if 'world_rotation' in batch_dict:
+        rotate_flag = True
+        world_rotation = batch_dict['world_rotation']
+    if 'world_scaling' in batch_dict:
+        scale_flag = True
+        world_scaling = batch_dict['world_scaling']
+    batch_size = rois.shape[0]
+
+    if is_points:
+        if is_points:
+            if scale_flag:
+                scale_factor = world_scaling
+                scale_factor = scale_factor.view(scale_factor.shape[0], 1, 1)
+                rois *= scale_factor
+    else:
+        assert len(rois.shape) == 3
+
+        for index in range(batch_size):
+            # flip
+            if flip_flag and world_flip_enabled[index] == 1:
+                rois[index, :, 1] = -rois[index, :, 1]
+                rois[index, :, 6] = -rois[index, :, 6]
+            # rotation
+            if rotate_flag:
+                rotation_angle = world_rotation[index].item()
+                cur_rois = rois[index]
+                rois[index, :, 0:3] = rotate_points_along_z(cur_rois[np.newaxis, :, 0:3], np.array([rotation_angle]))[0]
+                rois[index, :, 6] += rotation_angle
+        # scale
+        if scale_flag:
+            scale_factor = world_scaling
+            scale_factor = scale_factor.view(scale_factor.shape[0], 1, 1)
+            rois[...,0:6] *= scale_factor
+
+    return rois
