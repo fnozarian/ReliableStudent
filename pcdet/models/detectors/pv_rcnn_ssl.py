@@ -1,12 +1,14 @@
+import copy
 import os
 
 import torch
-import copy
 import torch.nn.functional as F
-
 from pcdet.datasets.augmentor.augmentor_utils import *
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
+
+from ...utils import common_utils
 from .detector3d_template import Detector3DTemplate
+
 from.pv_rcnn import PVRCNN
 
 
@@ -195,14 +197,15 @@ class PVRCNN_SSL(Detector3DTemplate):
             with torch.no_grad():
                 # batch_dict_std = copy.deepcopy(batch_dict) # doesn't work
                 batch_dict_std = {}
-                batch_dict_std['rois'] = batch_dict['rois'].data.clone()
+                batch_dict_std['rois_before_rev'] = batch_dict['rois'].data.clone()
                 batch_dict_std['roi_scores'] = batch_dict['roi_scores'].data.clone()
                 batch_dict_std['roi_labels'] = batch_dict['roi_labels'].data.clone()
                 batch_dict_std['has_class_labels'] = batch_dict['has_class_labels']
                 batch_dict_std['batch_size'] = batch_dict['batch_size']
-
+                #student_rois = batch_dict['roi_scores'].data.clone() #student rois
                 # TODO(farzad) Reverse student's augmentation of rois to align with teacher's rois
-
+                student_rev_rois = common_utils.reverse_augmentation(batch_dict_std['rois_before_rev'], batch_dict)# reverse augmentation
+                batch_dict_std['rois']=common_utils.forward_augmentation(student_rev_rois, batch_dict_ema) # resize to teachers's scale
                 batch_dict_std['point_features'] = batch_dict_ema['point_features'].data.clone()
                 batch_dict_std['point_coords'] = batch_dict_ema['point_coords'].data.clone()
                 batch_dict_std['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
