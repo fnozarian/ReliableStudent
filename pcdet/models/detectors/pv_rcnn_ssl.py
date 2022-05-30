@@ -212,6 +212,12 @@ class PVRCNN_SSL(Detector3DTemplate):
 
                 pred_dicts_std, recall_dicts_std = self.pv_rcnn_ema.post_processing(batch_dict_std,
                                                                             no_recall_dict=True, no_nms=True)
+                all_samples = []
+                for sample in pred_dicts_std:
+                    all_samples.append(sample['pred_scores'].unsqueeze(dim=0))
+                pred_scores_teacher = torch.cat(all_samples, dim=0)
+                self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = pred_scores_teacher.data.clone()
+                self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_mask'] = unlabeled_mask
             disp_dict = {}
             loss_rpn_cls, loss_rpn_box, tb_dict = self.pv_rcnn.dense_head.get_loss(scalar=False)
             loss_point, tb_dict = self.pv_rcnn.point_head.get_loss(tb_dict, scalar=False)

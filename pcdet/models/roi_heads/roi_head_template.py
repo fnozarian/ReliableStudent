@@ -236,10 +236,41 @@ class RoIHeadTemplate(nn.Module):
                 rcnn_acc_cls = (torch.abs(torch.sigmoid(rcnn_cls_flat) - rcnn_cls_labels) * cls_valid_mask).sum() \
                                / torch.clamp(cls_valid_mask.sum(), min=1.0)
             else:
+                # TODO NOTE! batch_size is hardcoded here. Any larger batch w/o scalar enabled is wrong!
                 batch_size = 2
                 batch_loss_cls = batch_loss_cls.reshape(batch_size, -1)
                 cls_valid_mask = cls_valid_mask.reshape(batch_size, -1)
-                rcnn_loss_cls = (batch_loss_cls * cls_valid_mask).sum(-1) / torch.clamp(cls_valid_mask.sum(-1), min=1.0)
+
+                # TODO Here we only weight hard bgs {roi | bg_thresh < iou(roi) < fg_thresh} of student's rois
+                #  based on the teacher's rcnn cls score, while, weighting all bgs based on this score
+                #  might be also possible
+                if 'interval_mask' in forward_ret_dict.keys() and 'rcnn_cls_score_teacher' in forward_ret_dict.keys():
+                    rcnn_cls_score_teacher = forward_ret_dict['rcnn_cls_score_teacher']
+                    interval_mask = forward_ret_dict['interval_mask']
+                    unlabeled_mask = forward_ret_dict['unlabeled_mask']
+                    unlabeled_mask = torch.zeros_like(interval_mask).index_fill_(0, unlabeled_mask, 1)
+                    labeled_mask = ~unlabeled_mask
+                    unlabeled_interval_mask = unlabeled_mask * interval_mask
+
+                    if self.model_cfg['LOSS_CONFIG']['UL_INTERVAL_ROI_IOU_SCORE_TYPE'] == 'all':
+                        # Assign teacher's rcnn cls weight only to interval rcnn roi's of the student and 1 to the rest
+                        # This provides higher supervision from unlabeled data since the loss of all
+                        # unlabeled fg/bg including intervals are going to be considered.
+                        weight = (1 - unlabeled_interval_mask.float()) + (
+                                    unlabeled_interval_mask.float() * rcnn_cls_score_teacher)
+
+                    elif self.model_cfg['LOSS_CONFIG']['UL_INTERVAL_ROI_IOU_SCORE_TYPE'] == 'interval-only':
+                        # Assign teacher's rcnn cls weight only to the interval rcnn roi's of the student
+                        # and 0 to the rest unlabeled rois.
+                        # This provides only supervision from interval rois of unlabeled samples + labeled data.
+                        weight = labeled_mask.float() + (unlabeled_interval_mask.float() * rcnn_cls_score_teacher)
+                    else:
+                        raise ValueError
+
+                    rcnn_loss_cls = (batch_loss_cls * cls_valid_mask * weight).sum(
+                        -1) / torch.clamp(cls_valid_mask.sum(-1), min=1.0)
+                else:
+                    rcnn_loss_cls = (batch_loss_cls * cls_valid_mask).sum(-1) / torch.clamp(cls_valid_mask.sum(-1), min=1.0)
                 rcnn_acc_cls = torch.abs(torch.sigmoid(rcnn_cls_flat) - rcnn_cls_labels).reshape(batch_size, -1)
                 rcnn_acc_cls = (rcnn_acc_cls * cls_valid_mask).sum(-1) / torch.clamp(cls_valid_mask.sum(-1), min=1.0)
         elif loss_cfgs.CLS_LOSS == 'CrossEntropy':

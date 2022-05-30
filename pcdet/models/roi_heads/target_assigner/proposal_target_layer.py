@@ -55,7 +55,8 @@ class ProposalTargetLayer(nn.Module):
         targets_dict = {'rois': batch_rois, 'gt_of_rois': batch_gt_of_rois, 'gt_iou_of_rois': batch_roi_ious,
                         'roi_scores': batch_roi_scores, 'roi_labels': batch_roi_labels,
                         'reg_valid_mask': reg_valid_mask,
-                        'rcnn_cls_labels': batch_cls_labels}
+                        'rcnn_cls_labels': batch_cls_labels,
+                        'interval_mask': interval_mask}
 
         return targets_dict
 
