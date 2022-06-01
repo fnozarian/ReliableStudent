@@ -247,8 +247,8 @@ class RoIHeadTemplate(nn.Module):
                 if 'interval_mask' in forward_ret_dict.keys() and 'rcnn_cls_score_teacher' in forward_ret_dict.keys():
                     rcnn_cls_score_teacher = forward_ret_dict['rcnn_cls_score_teacher']
                     interval_mask = forward_ret_dict['interval_mask']
-                    unlabeled_mask = forward_ret_dict['unlabeled_mask']
-                    unlabeled_mask = torch.zeros_like(interval_mask).index_fill_(0, unlabeled_mask, 1)
+                    unlabeled_inds = forward_ret_dict['unlabeled_mask']
+                    unlabeled_mask = torch.zeros_like(interval_mask).index_fill_(0, unlabeled_inds, 1)
                     labeled_mask = ~unlabeled_mask
                     unlabeled_interval_mask = unlabeled_mask * interval_mask
 

@@ -127,7 +127,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                             pseudo_box = torch.cat([pseudo_box, torch.zeros((diff, 8), device=pseudo_box.device)], dim=0)
                         new_boxes[unlabeled_mask[i]] = pseudo_box
                     batch_dict['gt_boxes'] = new_boxes
-
+                # apply student's augs on teacher's pseudo-labels only (not points)
                 batch_dict['gt_boxes'][unlabeled_mask, ...] = random_flip_along_x_bbox(
                     batch_dict['gt_boxes'][unlabeled_mask, ...], batch_dict['flip_x'][unlabeled_mask, ...]
                 )
@@ -197,18 +197,24 @@ class PVRCNN_SSL(Detector3DTemplate):
             with torch.no_grad():
                 # batch_dict_std = copy.deepcopy(batch_dict) # doesn't work
                 batch_dict_std = {}
-                batch_dict_std['rois_before_rev'] = batch_dict['rois'].data.clone()
+                batch_dict_std['rois'] = batch_dict['rois'].data.clone()
                 batch_dict_std['roi_scores'] = batch_dict['roi_scores'].data.clone()
                 batch_dict_std['roi_labels'] = batch_dict['roi_labels'].data.clone()
                 batch_dict_std['has_class_labels'] = batch_dict['has_class_labels']
                 batch_dict_std['batch_size'] = batch_dict['batch_size']
-                #student_rois = batch_dict['roi_scores'].data.clone() #student rois
-                # TODO(farzad) Reverse student's augmentation of rois to align with teacher's rois
-                student_rev_rois = common_utils.reverse_augmentation(batch_dict_std['rois_before_rev'], batch_dict)# reverse augmentation
-                batch_dict_std['rois']=common_utils.forward_augmentation(student_rev_rois, batch_dict_ema) # resize to teachers's scale
                 batch_dict_std['point_features'] = batch_dict_ema['point_features'].data.clone()
                 batch_dict_std['point_coords'] = batch_dict_ema['point_coords'].data.clone()
                 batch_dict_std['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
+
+                # reverse student's augmentation of rois
+                batch_dict_std['rois'][unlabeled_mask] = global_scaling_bbox(
+                    batch_dict_std['rois'][unlabeled_mask], batch_dict['scale'][unlabeled_mask])
+                batch_dict_std['rois'][unlabeled_mask] = global_rotation_bbox(
+                    batch_dict_std['rois'][unlabeled_mask], batch_dict['rot_angle'][unlabeled_mask])
+                batch_dict_std['rois'][unlabeled_mask] = random_flip_along_y_bbox(
+                    batch_dict_std['rois'][unlabeled_mask], batch_dict['flip_y'][unlabeled_mask])
+                batch_dict_std['rois'][unlabeled_mask] = random_flip_along_x_bbox(
+                    batch_dict_std['rois'][unlabeled_mask], batch_dict['flip_x'][unlabeled_mask])
 
                 self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
                                                   disable_gt_roi_when_pseudo_labeling=True)
@@ -216,8 +222,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                 pred_dicts_std, recall_dicts_std = self.pv_rcnn_ema.post_processing(batch_dict_std,
                                                                             no_recall_dict=True, no_nms=True)
                 all_samples = []
-                for sample in pred_dicts_std:
-                    all_samples.append(sample['pred_scores'].unsqueeze(dim=0))
+                for pred_dict in pred_dicts_std:
+                    all_samples.append(pred_dict['pred_scores'].unsqueeze(dim=0))
                 pred_scores_teacher = torch.cat(all_samples, dim=0)
                 self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = pred_scores_teacher.data.clone()
                 self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_mask'] = unlabeled_mask
@@ -233,7 +239,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             loss_rpn_box = loss_rpn_box[labeled_mask, ...].sum() + loss_rpn_box[unlabeled_mask, ...].sum() * self.unlabeled_weight
             loss_point = loss_point[labeled_mask, ...].sum()
-            loss_rcnn_cls = loss_rcnn_cls[labeled_mask, ...].sum()
+            loss_rcnn_cls = loss_rcnn_cls[labeled_mask, ...].sum() + loss_rcnn_cls[unlabeled_mask, ...].sum() * self.unlabeled_weight
 
             if not self.unlabeled_supervise_refine:
                 loss_rcnn_box = loss_rcnn_box[labeled_mask, ...].sum()

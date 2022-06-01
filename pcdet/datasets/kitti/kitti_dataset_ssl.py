@@ -516,6 +516,7 @@ class KittiDatasetSSL(DatasetTemplate):
             # print(data_dict)
             points_ema = data_dict['points'].copy()
             gt_boxes_ema = data_dict['gt_boxes'].copy()
+            # Reverses the student's augmentations applied on points/gt_boxes. Thus, teacher's input has no augs.
             gt_boxes_ema, points_ema, _ = global_scaling(gt_boxes_ema, points_ema, [0, 2],
                                                          scale_=1/data_dict['scale'])
             gt_boxes_ema, points_ema, _ = global_rotation(gt_boxes_ema, points_ema, [-1, 1],

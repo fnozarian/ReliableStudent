@@ -255,7 +255,7 @@ class Detector3DTemplate(nn.Module):
                         sem_scores = batch_dict['roi_scores'][index]
                 else:
                     label_preds = label_preds + 1
-
+                # Should be True to preserve the order of roi's passed from the student
                 if no_nms:
                     selected = torch.arange(len(cls_preds), device=cls_preds.device)
                     selected_scores = cls_preds
