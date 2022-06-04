@@ -246,6 +246,7 @@ class RoIHeadTemplate(nn.Module):
                 #  might be also possible
                 if 'interval_mask' in forward_ret_dict.keys() and 'rcnn_cls_score_teacher' in forward_ret_dict.keys():
                     rcnn_cls_score_teacher = forward_ret_dict['rcnn_cls_score_teacher']
+                    rcnn_cls_score_teacher = 1 - rcnn_cls_score_teacher  # represents the bg score
                     interval_mask = forward_ret_dict['interval_mask']
                     unlabeled_inds = forward_ret_dict['unlabeled_mask']
                     unlabeled_mask = torch.zeros_like(interval_mask).index_fill_(0, unlabeled_inds, 1)

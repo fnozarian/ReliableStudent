@@ -34,6 +34,7 @@ class ProposalTargetLayer(nn.Module):
         )
         # regression valid mask
         reg_valid_mask = (batch_roi_ious > self.roi_sampler_cfg.REG_FG_THRESH).long()
+        interval_mask = None
         # classification label
         if self.roi_sampler_cfg.CLS_SCORE_TYPE == 'cls':
             batch_cls_labels = (batch_roi_ious > self.roi_sampler_cfg.CLS_FG_THRESH).long()
@@ -47,8 +48,8 @@ class ProposalTargetLayer(nn.Module):
             bg_mask = batch_roi_ious < iou_bg_thresh
             interval_mask = (fg_mask == 0) & (bg_mask == 0)
             batch_cls_labels = (fg_mask > 0).float()
-            batch_cls_labels[interval_mask] = \
-                (batch_roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
+            # batch_cls_labels[interval_mask] = \
+            #     (batch_roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
         else:
             raise NotImplementedError
 
