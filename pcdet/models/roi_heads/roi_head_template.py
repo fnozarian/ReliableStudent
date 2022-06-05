@@ -147,7 +147,7 @@ class RoIHeadTemplate(nn.Module):
         roi_boxes3d = forward_ret_dict['rois']
         rcnn_batch_size = gt_boxes3d_ct.view(-1, code_size).shape[0]
 
-        batch_size = 2 # TODO currently hardcoded
+        batch_size = forward_ret_dict['reg_valid_mask'].shape[0]
 
         fg_mask = (reg_valid_mask > 0)
         fg_sum = fg_mask.long().sum().item()
@@ -236,8 +236,7 @@ class RoIHeadTemplate(nn.Module):
                 rcnn_acc_cls = (torch.abs(torch.sigmoid(rcnn_cls_flat) - rcnn_cls_labels) * cls_valid_mask).sum() \
                                / torch.clamp(cls_valid_mask.sum(), min=1.0)
             else:
-                # TODO NOTE! batch_size is hardcoded here. Any larger batch w/o scalar enabled is wrong!
-                batch_size = 2
+                batch_size = forward_ret_dict['rcnn_cls_labels'].shape[0]
                 batch_loss_cls = batch_loss_cls.reshape(batch_size, -1)
                 cls_valid_mask = cls_valid_mask.reshape(batch_size, -1)
 
@@ -280,7 +279,7 @@ class RoIHeadTemplate(nn.Module):
             if scalar:
                 rcnn_loss_cls = (batch_loss_cls * cls_valid_mask).sum() / torch.clamp(cls_valid_mask.sum(), min=1.0)
             else:
-                batch_size = 2
+                batch_size = forward_ret_dict['rcnn_cls_labels'].shape[0]
                 batch_loss_cls = batch_loss_cls.reshape(batch_size, -1)
                 cls_valid_mask = cls_valid_mask.reshape(batch_size, -1)
                 rcnn_loss_cls = (batch_loss_cls * cls_valid_mask).sum(-1) / torch.clamp(cls_valid_mask.sum(-1), min=1.0)

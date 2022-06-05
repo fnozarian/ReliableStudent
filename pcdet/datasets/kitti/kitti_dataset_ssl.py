@@ -390,7 +390,7 @@ class KittiDatasetSSL(DatasetTemplate):
             # info_unlabeled = copy.deepcopy(self.unlabeled_kitti_infos[index_unlabeled])
             info_unlabeled = np.random.choice(self.unlabeled_kitti_infos, 1)[0]
 
-            data_dict_unlabeled = self.get_item_single(info_unlabeled, no_db_sample=True)
+            data_dict_unlabeled = self.get_item_single(info_unlabeled, unlabeled=True)
             return [data_dict_labeled, data_dict_unlabeled]
         else:
             return data_dict_labeled
@@ -403,10 +403,9 @@ class KittiDatasetSSL(DatasetTemplate):
             for cur_sample in batch_list:
                 for key, val in cur_sample[0].items():
                     data_dict[key].append(val)
-                data_dict['mask'].append(np.ones([len(batch_list)]))
+            for cur_sample in batch_list:
                 for key, val in cur_sample[1].items():
                     data_dict[key].append(val)
-                data_dict['mask'].append(np.zeros([len(batch_list)]))
             batch_size = len(batch_list) * 2
         else:
             for cur_sample in batch_list:
@@ -440,7 +439,7 @@ class KittiDatasetSSL(DatasetTemplate):
         ret['batch_size'] = batch_size
         return ret
 
-    def get_item_single(self, info, no_db_sample=False):
+    def get_item_single(self, info, unlabeled=False):
         sample_idx = info['point_cloud']['lidar_idx']
 
         points = self.get_lidar(sample_idx)
@@ -456,6 +455,7 @@ class KittiDatasetSSL(DatasetTemplate):
             'points': points,
             'frame_id': sample_idx,
             'calib': calib,
+            'labeled_mask': 0 if unlabeled else 1
         }
 
         if 'annos' in info:
@@ -474,7 +474,7 @@ class KittiDatasetSSL(DatasetTemplate):
             if road_plane is not None:
                 input_dict['road_plane'] = road_plane
 
-        data_dict = self.prepare_data(data_dict=input_dict, no_db_sample=no_db_sample)
+        data_dict = self.prepare_data(data_dict=input_dict, no_db_sample=unlabeled)
         # if isinstance(data_dict, list):
         #     print(data_dict)
         data_dict['image_shape'] = img_shape
