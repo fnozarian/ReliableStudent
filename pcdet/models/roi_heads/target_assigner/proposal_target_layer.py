@@ -48,8 +48,8 @@ class ProposalTargetLayer(nn.Module):
             bg_mask = batch_roi_ious < iou_bg_thresh
             interval_mask = (fg_mask == 0) & (bg_mask == 0)
             batch_cls_labels = (fg_mask > 0).float()
-            # batch_cls_labels[interval_mask] = \
-            #     (batch_roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
+            batch_cls_labels[interval_mask] = \
+                (batch_roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
         else:
             raise NotImplementedError
 
