@@ -63,8 +63,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
                 pseudo_boxes = []
                 pseudo_scores = []
-                pseudo_labels = []
-                max_box_num = batch_dict['gt_boxes'].shape[1]
+                pseudo_sem_scores = []
                 max_pseudo_box_num = 0
                 for ind in unlabeled_inds:
                     pseudo_score = pred_dicts[ind]['pred_scores']
@@ -87,18 +86,14 @@ class PVRCNN_SSL(Detector3DTemplate):
                     pseudo_sem_score = pseudo_sem_score[valid_inds]
                     pseudo_box = pseudo_box[valid_inds]
                     pseudo_label = pseudo_label[valid_inds]
-
-                    # if len(valid_inds) > max_box_num:
-                    #     _, inds = torch.sort(pseudo_score, descending=True)
-                    #     inds = inds[:max_box_num]
-                    #     pseudo_box = pseudo_box[inds]
-                    #     pseudo_label = pseudo_label[inds]
+                    pseudo_score = pseudo_score[valid_inds]
 
                     pseudo_boxes.append(torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1))
+                    pseudo_sem_scores.append(pseudo_sem_score)
+                    pseudo_scores.append(pseudo_score)
+
                     if pseudo_box.shape[0] > max_pseudo_box_num:
                         max_pseudo_box_num = pseudo_box.shape[0]
-                    # pseudo_scores.append(pseudo_score)
-                    # pseudo_labels.append(pseudo_label)
 
                 max_box_num = batch_dict['gt_boxes'].shape[1]
 
@@ -146,26 +141,32 @@ class PVRCNN_SSL(Detector3DTemplate):
                 pseudo_ious = []
                 pseudo_accs = []
                 pseudo_fgs = []
+                sem_score_fgs = []
+                sem_score_bgs = []
                 for i, ind in enumerate(unlabeled_inds):
                     # statistics
                     anchor_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(
                         batch_dict['gt_boxes'][ind, ...][:, 0:7],
                         ori_unlabeled_boxes[i, :, 0:7])
                     cls_pseudo = batch_dict['gt_boxes'][ind, ...][:, 7]
-                    unzero_inds = torch.nonzero(cls_pseudo).squeeze(1).long()
-                    cls_pseudo = cls_pseudo[unzero_inds]
-                    if len(unzero_inds) > 0:
-                        iou_max, asgn = anchor_by_gt_overlap[unzero_inds, :].max(dim=1)
+                    nonzero_inds = torch.nonzero(cls_pseudo).squeeze(1).long()
+                    cls_pseudo = cls_pseudo[nonzero_inds]
+                    if len(nonzero_inds) > 0:
+                        iou_max, asgn = anchor_by_gt_overlap[nonzero_inds, :].max(dim=1)
                         pseudo_ious.append(iou_max.unsqueeze(0))
                         acc = (ori_unlabeled_boxes[i][:, 7].gather(dim=0, index=asgn) == cls_pseudo).float().mean()
                         pseudo_accs.append(acc.unsqueeze(0))
-                        fg = (iou_max > 0.5).float().sum(dim=0, keepdim=True) / len(unzero_inds)
+                        fg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
+                        bg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']  # bg_thresh includes both easy and hard bgs
+                        fg = (iou_max > fg_thresh).float().sum(dim=0, keepdim=True) / len(nonzero_inds)
 
-                        sem_score_fg = (pseudo_sem_score[unzero_inds] * (iou_max > 0.5).float()).sum(dim=0, keepdim=True) \
-                                       / torch.clamp((iou_max > 0.5).float().sum(dim=0, keepdim=True), min=1.0)
-                        sem_score_bg = (pseudo_sem_score[unzero_inds] * (iou_max < 0.5).float()).sum(dim=0, keepdim=True) \
-                                       / torch.clamp((iou_max < 0.5).float().sum(dim=0, keepdim=True), min=1.0)
+                        sem_score_fg = (pseudo_sem_scores[i][nonzero_inds] * (iou_max > fg_thresh).float()).sum(dim=0, keepdim=True) \
+                                       / torch.clamp((iou_max > fg_thresh).float().sum(dim=0, keepdim=True), min=1.0)
+                        sem_score_bg = (pseudo_sem_scores[i][nonzero_inds] * (iou_max < bg_thresh).float()).sum(dim=0, keepdim=True) \
+                                       / torch.clamp((iou_max < bg_thresh).float().sum(dim=0, keepdim=True), min=1.0)
                         pseudo_fgs.append(fg)
+                        sem_score_fgs.append(sem_score_fg)
+                        sem_score_bgs.append(sem_score_bg)
 
                         # only for 100% label
                         if self.supervise_mode >= 1:
@@ -183,8 +184,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                                                                                      :len(asgn), 3:6]
                     else:
                         ones = torch.ones((1), device=unlabeled_inds.device)
-                        sem_score_fg = ones
-                        sem_score_bg = ones
+                        sem_score_fgs.append(ones)
+                        sem_score_bgs.append(ones)
                         pseudo_ious.append(ones)
                         pseudo_accs.append(ones)
                         pseudo_fgs.append(ones)
@@ -262,8 +263,8 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             tb_dict_['pseudo_ious'] = torch.cat(pseudo_ious, dim=0).mean()
             tb_dict_['pseudo_accs'] = torch.cat(pseudo_accs, dim=0).mean()
-            tb_dict_['sem_score_fg'] = sem_score_fg.mean()
-            tb_dict_['sem_score_bg'] = sem_score_bg.mean()
+            tb_dict_['sem_score_fg'] = torch.cat(sem_score_fgs, dim=0).mean()
+            tb_dict_['sem_score_bg'] = torch.cat(sem_score_bgs, dim=0).mean()
 
             tb_dict_['max_box_num'] = max_box_num
             tb_dict_['max_pseudo_box_num'] = max_pseudo_box_num
