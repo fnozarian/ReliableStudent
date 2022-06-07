@@ -12,6 +12,12 @@ from .detector3d_template import Detector3DTemplate
 from.pv_rcnn import PVRCNN
 
 
+def _mean(tensor_list):
+    tensor = torch.cat(tensor_list)
+    tensor = tensor[~torch.isnan(tensor)]
+    mean = tensor.mean() if len(tensor) > 0 else torch.tensor([float('nan')])
+    return mean
+
 class PVRCNN_SSL(Detector3DTemplate):
     def __init__(self, model_cfg, num_class, dataset):
         super().__init__(model_cfg=model_cfg, num_class=num_class, dataset=dataset)
@@ -153,7 +159,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     cls_pseudo = cls_pseudo[nonzero_inds]
                     if len(nonzero_inds) > 0:
                         iou_max, asgn = anchor_by_gt_overlap[nonzero_inds, :].max(dim=1)
-                        pseudo_ious.append(iou_max.unsqueeze(0))
+                        pseudo_ious.append(iou_max.mean().unsqueeze(dim=0))
                         acc = (ori_unlabeled_boxes[i][:, 7].gather(dim=0, index=asgn) == cls_pseudo).float().mean()
                         pseudo_accs.append(acc.unsqueeze(0))
                         fg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
@@ -183,12 +189,12 @@ class PVRCNN_SSL(Detector3DTemplate):
                                                                                      batch_dict['gt_boxes'][ind, ...][
                                                                                      :len(asgn), 3:6]
                     else:
-                        ones = torch.ones((1), device=unlabeled_inds.device)
-                        sem_score_fgs.append(ones)
-                        sem_score_bgs.append(ones)
-                        pseudo_ious.append(ones)
-                        pseudo_accs.append(ones)
-                        pseudo_fgs.append(ones)
+                        nan = torch.tensor([float('nan')], device=unlabeled_inds.device)
+                        sem_score_fgs.append(nan)
+                        sem_score_bgs.append(nan)
+                        pseudo_ious.append(nan)
+                        pseudo_accs.append(nan)
+                        pseudo_fgs.append(nan)
 
 
             for cur_module in self.pv_rcnn.module_list:
@@ -261,10 +267,10 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     tb_dict_[key] = tb_dict[key]
 
-            tb_dict_['pseudo_ious'] = torch.cat(pseudo_ious, dim=0).mean()
-            tb_dict_['pseudo_accs'] = torch.cat(pseudo_accs, dim=0).mean()
-            tb_dict_['sem_score_fg'] = torch.cat(sem_score_fgs, dim=0).mean()
-            tb_dict_['sem_score_bg'] = torch.cat(sem_score_bgs, dim=0).mean()
+            tb_dict_['pseudo_ious'] = _mean(pseudo_ious)
+            tb_dict_['pseudo_accs'] = _mean(pseudo_accs)
+            tb_dict_['sem_score_fg'] = _mean(sem_score_fgs)
+            tb_dict_['sem_score_bg'] = _mean(sem_score_bgs)
 
             tb_dict_['max_box_num'] = max_box_num
             tb_dict_['max_pseudo_box_num'] = max_pseudo_box_num
