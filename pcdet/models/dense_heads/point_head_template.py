@@ -140,7 +140,7 @@ class PointHeadTemplate(nn.Module):
             pos_normalizer = positives.sum(dim=0).float()
             cls_weights /= torch.clamp(pos_normalizer, min=1.0)
         else:
-            batch_size = 2 # TODO this is hardcoded now
+            batch_size = self.forward_ret_dict['batch_size']
             pos_normalizer = positives.reshape(batch_size, -1).sum(dim=1, keepdim=True).float()
             cls_weights = cls_weights.reshape(batch_size, -1)
             cls_weights /= torch.clamp(pos_normalizer, min=1.0)
