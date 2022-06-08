@@ -256,14 +256,14 @@ class PVRCNN_SSL(Detector3DTemplate):
             tb_dict_ = {}
             for key in tb_dict.keys():
                 if 'loss' in key:
-                    tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].sum()
-                    tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].sum()
+                    tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].mean()
+                    tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
                 elif 'acc' in key:
-                    tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].sum()
-                    tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].sum()
+                    tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].mean()
+                    tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
                 elif 'point_pos_num' in key:
-                    tb_dict_[key + "_labeled"] = tb_dict[key][labeled_inds, ...].sum()
-                    tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].sum()
+                    tb_dict_[key + "_labeled"] = tb_dict[key][labeled_inds, ...].mean()
+                    tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
                 else:
                     tb_dict_[key] = tb_dict[key]
 
