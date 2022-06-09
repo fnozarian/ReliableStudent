@@ -79,6 +79,8 @@ class PVRCNN_SSL(Detector3DTemplate):
 
                     if len(pseudo_label) == 0:
                         pseudo_boxes.append(pseudo_label.new_zeros((0, 8)).float())
+                        pseudo_sem_scores.append(pseudo_label.new_zeros((1,)).float())
+                        pseudo_scores.append(pseudo_label.new_zeros((1,)).float())
                         continue
 
 
