@@ -162,7 +162,7 @@ def init_dist_slurm(tcp_port, local_rank, backend='nccl'):
     # os.environ['WORLD_SIZE'] = str(ntasks)
     # os.environ['RANK'] = str(proc_id)
     dist.init_process_group(backend=backend)
-    rank = int(os.environ['RANK'])
+    local_rank = int(os.environ['LOCAL_RANK'])
     total_gpus = dist.get_world_size()
 
     dist_vars = """ SLURM_NODELIST: %s
@@ -197,7 +197,7 @@ def init_dist_slurm(tcp_port, local_rank, backend='nccl'):
                            )
     print(dist_vars)
 
-    return total_gpus, rank
+    return total_gpus, local_rank
 
 
 def init_dist_pytorch(tcp_port, local_rank, backend='nccl'):
