@@ -15,7 +15,15 @@ from pcdet.models import build_network, model_fn_decorator
 from pcdet.utils import common_utils
 from train_utils.optimization import build_optimizer, build_scheduler
 from train_utils.train_utils import train_model
+import subprocess
 
+
+def get_git_commit_number():
+    if not os.path.exists('../.git'):
+        return '0000000'
+    cmd_out = subprocess.run(['git', 'rev-parse', 'HEAD'], stdout=subprocess.PIPE)
+    git_commit_number = cmd_out.stdout.decode('utf-8')[:7]
+    return git_commit_number
 
 def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
@@ -78,6 +86,9 @@ def parse_config():
     cfg.MODEL.UNLABELED_WEIGHT = args.unlabeled_weight
     cfg.MODEL.NO_NMS = args.no_nms
     cfg.MODEL.SUPERVISE_MODE = args.supervise_mode
+
+    rev = get_git_commit_number()
+    args.extra_tag = args.extra_tag + "_" + str(rev)
 
     if args.lr > 0.0:
         cfg.OPTIMIZATION.LR = args.lr
