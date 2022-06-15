@@ -244,20 +244,20 @@ class PVRCNN_SSL(Detector3DTemplate):
             loss_rcnn_cls, loss_rcnn_box, tb_dict = self.pv_rcnn.roi_head.get_loss(tb_dict, scalar=False)
 
             if not self.unlabeled_supervise_cls:
-                loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].sum()
+                loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].mean()
             else:
-                loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].sum() + loss_rpn_cls[unlabeled_inds, ...].sum() * self.unlabeled_weight
+                loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].mean() + loss_rpn_cls[unlabeled_inds, ...].mean() * self.unlabeled_weight
 
-            loss_rpn_box = loss_rpn_box[labeled_inds, ...].sum() + loss_rpn_box[unlabeled_inds, ...].sum() * self.unlabeled_weight
-            loss_point = loss_point[labeled_inds, ...].sum()
+            loss_rpn_box = loss_rpn_box[labeled_inds, ...].mean() + loss_rpn_box[unlabeled_inds, ...].mean() * self.unlabeled_weight
+            loss_point = loss_point[labeled_inds, ...].mean()
             if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
-                loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].sum() + loss_rcnn_cls[unlabeled_inds, ...].sum() * self.unlabeled_weight
+                loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean() + loss_rcnn_cls[unlabeled_inds, ...].mean() * self.unlabeled_weight
             else:
-                loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].sum()
+                loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean()
             if not self.unlabeled_supervise_refine:
-                loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].sum()
+                loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].mean()
             else:
-                loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].sum() + loss_rcnn_box[unlabeled_inds, ...].sum() * self.unlabeled_weight
+                loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].mean() + loss_rcnn_box[unlabeled_inds, ...].mean() * self.unlabeled_weight
 
             loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box
             tb_dict_ = {}
