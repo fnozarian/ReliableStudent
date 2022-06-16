@@ -16,6 +16,7 @@ def parse_config():
                         help='--exp_names <test-name-1>, <test-name-2> ..')
     parser.add_argument('--thresh', type=str, default='0.5, 0.25, 0.25')
     parser.add_argument('--save_to_file', action='store_true', default=True, help='')
+    parser.add_argument('--log_tb', action='store_true', default=True, help='')
     parser.add_argument('--result_tag', type=str, default=None, help='extra tag for this experiment')
     args = parser.parse_args()
     return args
@@ -63,7 +64,7 @@ def calc_mean_mAP():
         fw.write(str(metric))
         fw.write("\nExperiment(s)\n")
         fw.write(str(exp_names))
-
+    all_eval_results = []
     for _exp in exp_names:
         curr_eval_list_file = os.path.join("output/cfgs/kitti_models/pv_rcnn_ssl_60", _exp, "eval/eval_with_train/eval_list_val.txt")
         if eval_list is None and os.path.isfile(curr_eval_list_file):
@@ -108,12 +109,13 @@ def calc_mean_mAP():
         
         # reshape records based on eval_list
         eval_results=np.array(eval_results).reshape(len(eval_list),-1)
+        all_eval_results.append(eval_results)
         print("\nmAP(s)")
         print(*[str(np.round_(i, decimals=2)) for i in eval_results], sep="\n")
         if args.save_to_file:
             fw.write("\nmAP(s)")
             fw.write(str(np.round_(eval_results, decimals=2)))
-        
+
         current_max=np.max(eval_results, axis=0)
         max_results.append(current_max)
         print("\nMax mAP")
@@ -140,6 +142,34 @@ def calc_mean_mAP():
     if args.save_to_file: 
         fw.write("\nMean mAP")
         fw.write(str(np.round_(mean_res, decimals=2)))
+
+    if args.log_tb:
+        from tensorboardX import SummaryWriter
+
+        re_trial = re.compile(r'trial(\d)')
+        trials = re_trial.findall(" ".join(exp_names))
+        trials = sorted(map(int, trials))
+        trial_splits = re_trial.split(exp_names[0])
+        new_trial = "trial{0}-{1}".format(str(trials[0]), str(trials[-1]))
+        new_exp = "".join([trial_splits[0], new_trial, trial_splits[-1]])
+        new_exp_dir = os.path.join("output/cfgs/kitti_models/pv_rcnn_ssl_60", new_exp, "eval", "eval_with_train",
+                                   "tensorboard_val")
+        all_eval_results = np.dstack(all_eval_results)
+        mean_eval_results = np.mean(all_eval_results, -1)
+
+        classes = ['Car_3d', 'Pedestrian_3d', 'Cyclist_3d']
+        difficulties = ['easy_R40', 'moderate_R40', 'hard_R40']
+        num_diffs = len(difficulties)
+        num_classes = len(classes)
+        class_wise_mean_eval_results = mean_eval_results.reshape((-1, num_diffs, num_classes), order='F')
+
+        tb_log = SummaryWriter(log_dir=new_exp_dir)
+        for i, cls in enumerate(classes):
+            for j, diff in enumerate(difficulties):
+                key = cls + "/" + diff
+                for k, step in enumerate(eval_list):
+                    val = class_wise_mean_eval_results[k, j, i]
+                    tb_log.add_scalar(key, val, step)
 
 if __name__ == "__main__":
     calc_mean_mAP()
