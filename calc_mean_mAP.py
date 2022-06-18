@@ -86,26 +86,29 @@ def calc_mean_mAP():
         if len(text_files)==0:
             print("No text file found containing results")
             continue
-
-        selected_file=os.path.join(curr_res_dir, text_files[0])
-        print("\nScanning {} for evaluated results\n".format(selected_file))# can be filtered based on date-time
-        if args.save_to_file: 
-            fw.write("\nScanning {} for evaluated results\n".format(selected_file))
         
         # get data from file 
         eval_results=[]
-        line_numbers=[]
-        linenum = 0
 
-        with open(selected_file) as fp:
-            for line in fp:
-                linenum += 1
-                if pattern.search(line) != None: # If a match is found 
-                    line_numbers.append(linenum+3) # add following res-line-number into list
-                if linenum in line_numbers:
-                    res_=np.fromstring( line.strip().split("3d   AP:")[1], dtype=np.float64, sep=',' )
-                    #print(res_)
-                    eval_results.append(res_)
+        for file_ in text_files:# traverse all file to find evaluation results
+            selected_file=os.path.join(curr_res_dir, file_)
+            print("\nScanning {} for evaluated results\n".format(selected_file))# can be filtered based on date-time
+            if args.save_to_file: 
+                fw.write("\nScanning {} for evaluated results\n".format(selected_file))
+            
+            
+            line_numbers=[]
+            linenum = 0
+        
+            with open(selected_file) as fp:
+                for line in fp:
+                    linenum += 1
+                    if pattern.search(line) != None: # If a match is found 
+                        line_numbers.append(linenum+3) # add following res-line-number into list
+                    if linenum in line_numbers:
+                        res_=np.fromstring( line.strip().split("3d   AP:")[1], dtype=np.float64, sep=',' )
+                        #print(res_)
+                        eval_results.append(res_)
         
         # reshape records based on eval_list
         eval_results=np.array(eval_results).reshape(len(eval_list),-1)
