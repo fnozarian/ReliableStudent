@@ -250,7 +250,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             loss_rpn_box = loss_rpn_box[labeled_inds, ...].mean() + loss_rpn_box[unlabeled_inds, ...].mean() * self.unlabeled_weight
             loss_point = loss_point[labeled_inds, ...].mean()
-            if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
+            if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False):
                 loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean() + loss_rcnn_cls[unlabeled_inds, ...].mean() * self.unlabeled_weight
             else:
                 loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean()
