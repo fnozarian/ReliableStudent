@@ -202,78 +202,73 @@ class PVRCNN_SSL(Detector3DTemplate):
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
 
-            if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABLITY', False):
+            if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
                 
-                # using student to evaluate teacher's bg/fg proposalas through its rcnn head
-                batch_dict_tea = {}
-                batch_dict_tea['rois'] = batch_dict_ema['rois'].data.clone()
-                batch_dict_tea['roi_scores'] = batch_dict_ema['roi_scores'].data.clone()
-                batch_dict_tea['roi_labels'] = batch_dict_ema['roi_labels'].data.clone()
-                batch_dict_tea['has_class_labels'] = batch_dict_ema['has_class_labels']
-                batch_dict_tea['batch_size'] = batch_dict_ema['batch_size']
-                batch_dict_tea['point_features'] = batch_dict['point_features'].data.clone()
-                batch_dict_tea['point_coords'] = batch_dict['point_coords'].data.clone()
-                batch_dict_tea['point_cls_scores'] = batch_dict['point_cls_scores'].data.clone()
+                # 1. Use Student's ROI head for Teacher's RPN head proposals (aka S for T)
+                batch_dict_s_for_t = {}
+                batch_dict_s_for_t['rois'] = batch_dict_ema['rois'].data.clone()
+                batch_dict_s_for_t['roi_scores'] = batch_dict_ema['roi_scores'].data.clone()
+                batch_dict_s_for_t['roi_labels'] = batch_dict_ema['roi_labels'].data.clone()
+                batch_dict_s_for_t['has_class_labels'] = batch_dict_ema['has_class_labels']
+                batch_dict_s_for_t['batch_size'] = batch_dict_ema['batch_size']
+                batch_dict_s_for_t['point_features'] = batch_dict['point_features'].data.clone()
+                batch_dict_s_for_t['point_coords'] = batch_dict['point_coords'].data.clone()
+                batch_dict_s_for_t['point_cls_scores'] = batch_dict['point_cls_scores'].data.clone()
+                # Pass gt_boxes (pseudo boxes for unlab samples)
+                batch_dict_s_for_t['gt_boxes'] = batch_dict['gt_boxes'].data.clone()
 
-                self.pv_rcnn.roi_head.forward(batch_dict_tea)# disable_gt_roi_when_pseudo_labeling is false for student?
-                pred_dicts_std, _ = self.pv_rcnn.post_processing(batch_dict_tea,
-                                                                            no_recall_dict=True, no_nms=True)
+                # Apply Student's aug on Teacher's proposals
+                batch_dict_s_for_t = self.apply_augmentation(batch_dict_s_for_t, batch_dict, unlabeled_inds)
+
+                # disable_gt_roi_when_pseudo_labeling to be kept True in order to avoid new gt
+                self.pv_rcnn.roi_head.forward(batch_dict_s_for_t, disable_gt_roi_when_pseudo_labeling=False)   
+                pred_dicts_s_for_t, _ = self.pv_rcnn.post_processing(batch_dict_s_for_t,
+                                                                no_recall_dict=True, no_nms=True)
                 scores_, boxes_= [],[] 
-                for pred_dict in pred_dicts_std:
+                for pred_dict in pred_dicts_s_for_t:
                     scores_.append(pred_dict['pred_scores'].unsqueeze(dim=0))
                     boxes_.append(pred_dict['pred_boxes'].unsqueeze(dim=0))
-                pred_scores_student = torch.cat(scores_, dim=0)
-                pred_boxes_student = torch.cat(boxes_, dim=0)
+                pred_scores_s_for_t = torch.cat(scores_, dim=0)
+                pred_boxes_s_for_t = torch.cat(boxes_, dim=0)
 
-                # using teacher to evaluate student's bg/fg proposals through its rcnn head
+                # 2. Use Teacher's ROI head for Student's RPN head proposals (aka T for S)
                 with torch.no_grad():
+                    batch_dict_t_for_s = {}
+                    batch_dict_t_for_s['rois'] = batch_dict['rois'].data.clone()
+                    batch_dict_t_for_s['roi_scores'] = batch_dict['roi_scores'].data.clone()
+                    batch_dict_t_for_s['roi_labels'] = batch_dict['roi_labels'].data.clone()
+                    batch_dict_t_for_s['has_class_labels'] = batch_dict['has_class_labels']
+                    batch_dict_t_for_s['batch_size'] = batch_dict['batch_size']
+                    batch_dict_t_for_s['point_features'] = batch_dict_ema['point_features'].data.clone()
+                    batch_dict_t_for_s['point_coords'] = batch_dict_ema['point_coords'].data.clone()
+                    batch_dict_t_for_s['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
+                    
+                    # Reverse Student's augmented ROI's for Teacher's ROI head
+                    batch_dict_t_for_s = self.reverse_augmentation(batch_dict_t_for_s, batch_dict, unlabeled_inds)
 
-                    batch_dict_std = {}
-                    batch_dict_std['rois'] = batch_dict['rois'].data.clone()
-                    batch_dict_std['roi_scores'] = batch_dict['roi_scores'].data.clone()
-                    batch_dict_std['roi_labels'] = batch_dict['roi_labels'].data.clone()
-                    batch_dict_std['has_class_labels'] = batch_dict['has_class_labels']
-                    batch_dict_std['batch_size'] = batch_dict['batch_size']
-                    batch_dict_std['point_features'] = batch_dict_ema['point_features'].data.clone()
-                    batch_dict_std['point_coords'] = batch_dict_ema['point_coords'].data.clone()
-                    batch_dict_std['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
-                    # reverse student's augmentation of rois
-                    batch_dict_std['rois'][unlabeled_inds] = global_scaling_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['scale'][unlabeled_inds])
-                    batch_dict_std['rois'][unlabeled_inds] = global_rotation_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['rot_angle'][unlabeled_inds])
-                    batch_dict_std['rois'][unlabeled_inds] = random_flip_along_y_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['flip_y'][unlabeled_inds])
-                    batch_dict_std['rois'][unlabeled_inds] = random_flip_along_x_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['flip_x'][unlabeled_inds])
-
-                    self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
+                    self.pv_rcnn_ema.roi_head.forward(batch_dict_t_for_s,
                                                       disable_gt_roi_when_pseudo_labeling=True)
-
-                    pred_dicts_tea, _ = self.pv_rcnn_ema.post_processing(batch_dict_std,
-                                                                                no_recall_dict=True, no_nms=True)
-                    
-                    
-                    
+                    pred_dicts_t_for_s, _ = self.pv_rcnn_ema.post_processing(batch_dict_t_for_s,
+                                                                        no_recall_dict=True, no_nms=True)
 
                     scores_, boxes_= [],[] 
-                    for pred_dict in pred_dicts_tea:
+                    for pred_dict in pred_dicts_t_for_s:
                         scores_.append(pred_dict['pred_scores'].unsqueeze(dim=0))
                         boxes_.append(pred_dict['pred_boxes'].unsqueeze(dim=0))
-                    pred_scores_teacher = torch.cat(scores_, dim=0)
-                    pred_boxes_teacher = torch.cat(boxes_, dim=0)
-
-                    # 1: Calculate LU_CLS
-                    # for that we first need reliablity
-                    self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = pred_scores_teacher.data.clone()
-                    self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_student'] = pred_scores_student.data.clone()
+                    pred_scores_t_for_s = torch.cat(scores_, dim=0)
+                    pred_boxes_t_for_s = torch.cat(boxes_, dim=0)
+                
+                    # 1: Calculate LU_CLS (Similar to soft-teacher-exp)
+                    # Uses pred_scores_t_for_s and original rcnn scores of student
+                    # Reliability concept is already been taken care by soft-teacher's implementation in roi_head_template 
+                    self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = pred_scores_t_for_s.data.clone()
                     self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_mask'] = unlabeled_inds
 
                     # 2: Calculate LU_ROI
-                    # for the proposals of teacher Sp
-                    # KL div b/w teacher and student cls scroes + distance b/w teacher and students proposal
+                    # Uses (pred_scores_s_for_t, pred_boxes_s_for_t) from student and (rcnn_cls, rcnn_reg) from teacher
+                    # TODO : take care of unlabeled inds
+                    # Total unsupervised loss = KL div loss on classification + L2 loss on regression 
                     # apply jittering by augmentation to calc mean and st.d 
-            
             
             if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
                 # using teacher to evaluate student's bg/fg proposals through its rcnn head
@@ -367,6 +362,28 @@ class PVRCNN_SSL(Detector3DTemplate):
             pred_dicts, recall_dicts = self.pv_rcnn.post_processing(batch_dict)
 
             return pred_dicts, recall_dicts, {}
+
+    def apply_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds):
+        batch_dict['rois'][unlabeled_inds] = random_flip_along_x_bbox(
+            batch_dict['rois'][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
+        batch_dict['rois'][unlabeled_inds] = random_flip_along_y_bbox(
+            batch_dict['rois'][unlabeled_inds], batch_dict_org['flip_y'][unlabeled_inds])
+        batch_dict['rois'][unlabeled_inds] = global_rotation_bbox(
+            batch_dict['rois'][unlabeled_inds], batch_dict_org['rot_angle'][unlabeled_inds])
+        batch_dict['rois'][unlabeled_inds] = global_scaling_bbox(
+            batch_dict['rois'][unlabeled_inds], batch_dict_org['scale'][unlabeled_inds])
+        return batch_dict
+    
+    def reverse_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds):
+        batch_dict['rois'][unlabeled_inds] = global_scaling_bbox(
+            batch_dict['rois'][unlabeled_inds], batch_dict_org['scale'][unlabeled_inds])
+        batch_dict['rois'][unlabeled_inds] = global_rotation_bbox(
+            batch_dict['rois'][unlabeled_inds], batch_dict_org['rot_angle'][unlabeled_inds])
+        batch_dict['rois'][unlabeled_inds] = random_flip_along_y_bbox(
+            batch_dict['rois'][unlabeled_inds], batch_dict_org['flip_y'][unlabeled_inds])
+        batch_dict['rois'][unlabeled_inds] = random_flip_along_x_bbox(
+            batch_dict['rois'][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
+        return batch_dict
 
     def get_supervised_training_loss(self):
         disp_dict = {}

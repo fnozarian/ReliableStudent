@@ -160,6 +160,7 @@ MODEL:
         NAME: PVRCNNHead
         CLASS_AGNOSTIC: True
         ENABLE_SOFT_TEACHER: True
+        ENABLE_RELIABILITY: True
         SHARED_FC: [256, 256]
         CLS_FC: [256, 256]
         REG_FC: [256, 256]
