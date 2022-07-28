@@ -56,155 +56,203 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict_ema[k[:-4]] = batch_dict[k]
                 else:
                     batch_dict_ema[k] = batch_dict[k]
+            
+            # If ENABLE_RELIABILITY is True, run WA (Humble Teacher) along with original teacher 
+            if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
+                # Create new dict for weakly aug.(WA) data for teacher - Eg. flip along x axis
+                batch_dict_ema_wa = copy.deepcopy(batch_dict_ema)
 
-            with torch.no_grad():
-                # self.pv_rcnn_ema.eval()  # Important! must be in train mode
-                for cur_module in self.pv_rcnn_ema.module_list:
-                    try:
-                        batch_dict_ema = cur_module(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
-                    except:
-                        batch_dict_ema = cur_module(batch_dict_ema)
-                pred_dicts, recall_dicts = self.pv_rcnn_ema.post_processing(batch_dict_ema,
-                                                                            no_recall_dict=True, override_thresh=0.0, no_nms=self.no_nms)
+                with torch.no_grad():
+                    # self.pv_rcnn_ema.eval()  # Important! must be in train mode
+                    for cur_module in self.pv_rcnn_ema.module_list:
+                        # Do not use RPN to produce rois for WA image, instead augment (eg. flip) 
+                        # the proposal coord. of P horizontally to obtain P^
+                        if cur_module.model_cfg['NAME']=='AnchorHeadSingle':
 
-                pseudo_boxes = []
-                pseudo_scores = []
-                pseudo_sem_scores = []
-                max_pseudo_box_num = 0
-                for ind in unlabeled_inds:
-                    pseudo_score = pred_dicts[ind]['pred_scores']
-                    pseudo_box = pred_dicts[ind]['pred_boxes']
-                    pseudo_label = pred_dicts[ind]['pred_labels']
-                    pseudo_sem_score = pred_dicts[ind]['pred_sem_scores']
+                            batch_dict_ema = cur_module(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
+                            
+                            # Eq. 6 & 7 from Humble Teacher
+                            batch_dict_ema_wa['batch_cls_preds'] = batch_dict_ema['batch_cls_preds'].data.clone()
+                            batch_dict_ema_wa['batch_box_preds'] = batch_dict_ema['batch_box_preds'].data.clone()
+                            batch_dict_ema_wa['cls_preds_normalized'] = batch_dict_ema['cls_preds_normalized']
 
-                    if len(pseudo_label) == 0:
-                        pseudo_boxes.append(pseudo_label.new_zeros((0, 8)).float())
-                        pseudo_sem_scores.append(pseudo_label.new_zeros((1,)).float())
-                        pseudo_scores.append(pseudo_label.new_zeros((1,)).float())
-                        continue
+                            batch_dict_ema_wa['batch_box_preds'][unlabeled_inds] = random_flip_along_x_bbox(batch_dict_ema_wa['batch_box_preds'][unlabeled_inds], 
+                                                                                                            batch_dict_ema_wa['flip_x'][unlabeled_inds])
+                         
+                            batch_dict_ema_wa = cur_module(batch_dict_ema_wa, disable_gt_roi_when_pseudo_labeling=True)
+                        else :
+                            try:
+                                batch_dict_ema = cur_module(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
+                                batch_dict_ema_wa = cur_module(batch_dict_ema_wa, disable_gt_roi_when_pseudo_labeling=True)
+                            except:
+                                batch_dict_ema = cur_module(batch_dict_ema)    
+                                batch_dict_ema_wa = cur_module(batch_dict_ema_wa)  
+                    
+                    # Eq. 8 and 9 from Humble Teacher - Compute mean proposal wise b/w batch_dict_ema and batch_dict_ema_wa for lab+unlab data
+                    batch_dict_ema['mean_cls'] = (batch_dict_ema['rois'] + batch_dict_ema_wa['rois']) / 0.5
+                    batch_dict_ema['mean_reg'] = (batch_dict_ema['roi_scores'] + batch_dict_ema_wa['roi_scores']) / 0.5
+
+                    batch_dict_ema['var_cls'] = torch.var(torch.stack((batch_dict_ema['roi_scores'], 
+                                                                        batch_dict_ema_wa['roi_scores'])), dim=1)
+                    # Compute variance proposal wise b/w batch_dict_ema and batch_dict_ema_wa for lab+unlab data
+                    batch_dict_ema['var_reg'] = torch.var(torch.stack((batch_dict_ema['rois'], 
+                                                                        batch_dict_ema_wa['rois'])), dim=1)
+
+                    # Update ema model's rois and roi_scores with teacher ensembled mean values of cls and reg
+                    batch_dict_ema['rois'][unlabeled_inds] = batch_dict_ema['mean_cls'][unlabeled_inds]
+                    batch_dict_ema['roi_scores'][unlabeled_inds] = batch_dict_ema['mean_reg'][unlabeled_inds]
+ 
+            # Else, run the original teacher only 
+            else : 
+                with torch.no_grad():
+                    for cur_module in self.pv_rcnn_ema.module_list:
+                        try:
+                            batch_dict_ema = cur_module(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
+                        except:
+                            batch_dict_ema = cur_module(batch_dict_ema)
+            
+            pred_dicts, recall_dicts = self.pv_rcnn_ema.post_processing(batch_dict_ema,
+                                                                        no_recall_dict=True, override_thresh=0.0, no_nms=self.no_nms)
+            #! TODO : Loss computation (KL div and L2 loss) using the variance weights above
+            
+            pseudo_boxes = []
+            pseudo_scores = []
+            pseudo_sem_scores = []
+            max_pseudo_box_num = 0
+            for ind in unlabeled_inds:
+                pseudo_score = pred_dicts[ind]['pred_scores']
+                pseudo_box = pred_dicts[ind]['pred_boxes']
+                pseudo_label = pred_dicts[ind]['pred_labels']
+                pseudo_sem_score = pred_dicts[ind]['pred_sem_scores']
+
+                if len(pseudo_label) == 0:
+                    pseudo_boxes.append(pseudo_label.new_zeros((0, 8)).float())
+                    pseudo_sem_scores.append(pseudo_label.new_zeros((1,)).float())
+                    pseudo_scores.append(pseudo_label.new_zeros((1,)).float())
+                    continue
 
 
-                    conf_thresh = torch.tensor(self.thresh, device=pseudo_label.device).unsqueeze(
-                        0).repeat(len(pseudo_label), 1).gather(dim=1, index=(pseudo_label-1).unsqueeze(-1))
+                conf_thresh = torch.tensor(self.thresh, device=pseudo_label.device).unsqueeze(
+                    0).repeat(len(pseudo_label), 1).gather(dim=1, index=(pseudo_label-1).unsqueeze(-1))
 
-                    valid_inds = pseudo_score > conf_thresh.squeeze()
+                valid_inds = pseudo_score > conf_thresh.squeeze()
 
-                    valid_inds = valid_inds * (pseudo_sem_score > self.sem_thresh[0])
+                valid_inds = valid_inds * (pseudo_sem_score > self.sem_thresh[0])
 
-                    pseudo_sem_score = pseudo_sem_score[valid_inds]
-                    pseudo_box = pseudo_box[valid_inds]
-                    pseudo_label = pseudo_label[valid_inds]
-                    pseudo_score = pseudo_score[valid_inds]
+                pseudo_sem_score = pseudo_sem_score[valid_inds]
+                pseudo_box = pseudo_box[valid_inds]
+                pseudo_label = pseudo_label[valid_inds]
+                pseudo_score = pseudo_score[valid_inds]
 
-                    pseudo_boxes.append(torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1))
-                    pseudo_sem_scores.append(pseudo_sem_score)
-                    pseudo_scores.append(pseudo_score)
+                pseudo_boxes.append(torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1))
+                pseudo_sem_scores.append(pseudo_sem_score)
+                pseudo_scores.append(pseudo_score)
 
-                    if pseudo_box.shape[0] > max_pseudo_box_num:
-                        max_pseudo_box_num = pseudo_box.shape[0]
+                if pseudo_box.shape[0] > max_pseudo_box_num:
+                    max_pseudo_box_num = pseudo_box.shape[0]
 
-                max_box_num = batch_dict['gt_boxes'].shape[1]
+            max_box_num = batch_dict['gt_boxes'].shape[1]
 
-                # assert max_box_num >= max_pseudo_box_num
-                ori_unlabeled_boxes = batch_dict['gt_boxes'][unlabeled_inds, ...]
+            # assert max_box_num >= max_pseudo_box_num
+            ori_unlabeled_boxes = batch_dict['gt_boxes'][unlabeled_inds, ...]
 
-                if max_box_num >= max_pseudo_box_num:
-                    for i, pseudo_box in enumerate(pseudo_boxes):
-                        diff = max_box_num - pseudo_box.shape[0]
-                        if diff > 0:
-                            pseudo_box = torch.cat([pseudo_box, torch.zeros((diff, 8), device=pseudo_box.device)], dim=0)
-                        batch_dict['gt_boxes'][unlabeled_inds[i]] = pseudo_box
+            if max_box_num >= max_pseudo_box_num:
+                for i, pseudo_box in enumerate(pseudo_boxes):
+                    diff = max_box_num - pseudo_box.shape[0]
+                    if diff > 0:
+                        pseudo_box = torch.cat([pseudo_box, torch.zeros((diff, 8), device=pseudo_box.device)], dim=0)
+                    batch_dict['gt_boxes'][unlabeled_inds[i]] = pseudo_box
+            else:
+                ori_boxes = batch_dict['gt_boxes']
+                new_boxes = torch.zeros((ori_boxes.shape[0], max_pseudo_box_num, ori_boxes.shape[2]),
+                                        device=ori_boxes.device)
+                for i, inds in enumerate(labeled_inds):
+                    diff = max_pseudo_box_num - ori_boxes[inds].shape[0]
+                    new_box = torch.cat([ori_boxes[inds], torch.zeros((diff, 8), device=ori_boxes[inds].device)], dim=0)
+                    new_boxes[inds] = new_box
+                for i, pseudo_box in enumerate(pseudo_boxes):
+
+                    diff = max_pseudo_box_num - pseudo_box.shape[0]
+                    if diff > 0:
+                        pseudo_box = torch.cat([pseudo_box, torch.zeros((diff, 8), device=pseudo_box.device)], dim=0)
+                    new_boxes[unlabeled_inds[i]] = pseudo_box
+                batch_dict['gt_boxes'] = new_boxes
+            # apply student's augs on teacher's pseudo-labels only (not points)
+            batch_dict['gt_boxes'][unlabeled_inds, ...] = random_flip_along_x_bbox(
+                batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['flip_x'][unlabeled_inds, ...]
+            )
+
+            batch_dict['gt_boxes'][unlabeled_inds, ...] = random_flip_along_y_bbox(
+                batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['flip_y'][unlabeled_inds, ...]
+            )
+
+            batch_dict['gt_boxes'][unlabeled_inds, ...] = global_rotation_bbox(
+                batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['rot_angle'][unlabeled_inds, ...]
+            )
+
+            batch_dict['gt_boxes'][unlabeled_inds, ...] = global_scaling_bbox(
+                batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['scale'][unlabeled_inds, ...]
+            )
+
+            pseudo_ious = []
+            pseudo_accs = []
+            pseudo_fgs = []
+            sem_score_fgs = []
+            sem_score_bgs = []
+            for i, ind in enumerate(unlabeled_inds):
+                # statistics
+                anchor_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(
+                    batch_dict['gt_boxes'][ind, ...][:, 0:7],
+                    ori_unlabeled_boxes[i, :, 0:7])
+                cls_pseudo = batch_dict['gt_boxes'][ind, ...][:, 7]
+                nonzero_inds = torch.nonzero(cls_pseudo).squeeze(1).long()
+                cls_pseudo = cls_pseudo[nonzero_inds]
+                if len(nonzero_inds) > 0:
+                    iou_max, asgn = anchor_by_gt_overlap[nonzero_inds, :].max(dim=1)
+                    pseudo_ious.append(iou_max.mean().unsqueeze(dim=0))
+                    acc = (ori_unlabeled_boxes[i][:, 7].gather(dim=0, index=asgn) == cls_pseudo).float().mean()
+                    pseudo_accs.append(acc.unsqueeze(0))
+                    fg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
+                    bg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']  # bg_thresh includes both easy and hard bgs
+                    fg = (iou_max > fg_thresh).float().sum(dim=0, keepdim=True) / len(nonzero_inds)
+
+                    sem_score_fg = (pseudo_sem_scores[i][nonzero_inds] * (iou_max > fg_thresh).float()).sum(dim=0, keepdim=True) \
+                                    / torch.clamp((iou_max > fg_thresh).float().sum(dim=0, keepdim=True), min=1.0)
+                    sem_score_bg = (pseudo_sem_scores[i][nonzero_inds] * (iou_max < bg_thresh).float()).sum(dim=0, keepdim=True) \
+                                    / torch.clamp((iou_max < bg_thresh).float().sum(dim=0, keepdim=True), min=1.0)
+                    pseudo_fgs.append(fg)
+                    sem_score_fgs.append(sem_score_fg)
+                    sem_score_bgs.append(sem_score_bg)
+
+                    # only for 100% label
+                    if self.supervise_mode >= 1:
+                        filter = iou_max > 0.3
+                        asgn = asgn[filter]
+                        batch_dict['gt_boxes'][ind, ...][:] = torch.zeros_like(batch_dict['gt_boxes'][ind, ...][:])
+                        batch_dict['gt_boxes'][ind, ...][:len(asgn)] = ori_unlabeled_boxes[i, :].gather(dim=0, index=asgn.unsqueeze(-1).repeat(1, 8))
+
+                        if self.supervise_mode == 2:
+                            batch_dict['gt_boxes'][ind, ...][:len(asgn), 0:3] += 0.1 * torch.randn((len(asgn), 3), device=iou_max.device) * \
+                                                                                    batch_dict['gt_boxes'][ind, ...][
+                                                                                    :len(asgn), 3:6]
+                            batch_dict['gt_boxes'][ind, ...][:len(asgn), 3:6] += 0.1 * torch.randn((len(asgn), 3), device=iou_max.device) * \
+                                                                                    batch_dict['gt_boxes'][ind, ...][
+                                                                                    :len(asgn), 3:6]
                 else:
-                    ori_boxes = batch_dict['gt_boxes']
-                    new_boxes = torch.zeros((ori_boxes.shape[0], max_pseudo_box_num, ori_boxes.shape[2]),
-                                            device=ori_boxes.device)
-                    for i, inds in enumerate(labeled_inds):
-                        diff = max_pseudo_box_num - ori_boxes[inds].shape[0]
-                        new_box = torch.cat([ori_boxes[inds], torch.zeros((diff, 8), device=ori_boxes[inds].device)], dim=0)
-                        new_boxes[inds] = new_box
-                    for i, pseudo_box in enumerate(pseudo_boxes):
-
-                        diff = max_pseudo_box_num - pseudo_box.shape[0]
-                        if diff > 0:
-                            pseudo_box = torch.cat([pseudo_box, torch.zeros((diff, 8), device=pseudo_box.device)], dim=0)
-                        new_boxes[unlabeled_inds[i]] = pseudo_box
-                    batch_dict['gt_boxes'] = new_boxes
-                # apply student's augs on teacher's pseudo-labels only (not points)
-                batch_dict['gt_boxes'][unlabeled_inds, ...] = random_flip_along_x_bbox(
-                    batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['flip_x'][unlabeled_inds, ...]
-                )
-
-                batch_dict['gt_boxes'][unlabeled_inds, ...] = random_flip_along_y_bbox(
-                    batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['flip_y'][unlabeled_inds, ...]
-                )
-
-                batch_dict['gt_boxes'][unlabeled_inds, ...] = global_rotation_bbox(
-                    batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['rot_angle'][unlabeled_inds, ...]
-                )
-
-                batch_dict['gt_boxes'][unlabeled_inds, ...] = global_scaling_bbox(
-                    batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['scale'][unlabeled_inds, ...]
-                )
-
-                pseudo_ious = []
-                pseudo_accs = []
-                pseudo_fgs = []
-                sem_score_fgs = []
-                sem_score_bgs = []
-                for i, ind in enumerate(unlabeled_inds):
-                    # statistics
-                    anchor_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(
-                        batch_dict['gt_boxes'][ind, ...][:, 0:7],
-                        ori_unlabeled_boxes[i, :, 0:7])
-                    cls_pseudo = batch_dict['gt_boxes'][ind, ...][:, 7]
-                    nonzero_inds = torch.nonzero(cls_pseudo).squeeze(1).long()
-                    cls_pseudo = cls_pseudo[nonzero_inds]
-                    if len(nonzero_inds) > 0:
-                        iou_max, asgn = anchor_by_gt_overlap[nonzero_inds, :].max(dim=1)
-                        pseudo_ious.append(iou_max.mean().unsqueeze(dim=0))
-                        acc = (ori_unlabeled_boxes[i][:, 7].gather(dim=0, index=asgn) == cls_pseudo).float().mean()
-                        pseudo_accs.append(acc.unsqueeze(0))
-                        fg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
-                        bg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']  # bg_thresh includes both easy and hard bgs
-                        fg = (iou_max > fg_thresh).float().sum(dim=0, keepdim=True) / len(nonzero_inds)
-
-                        sem_score_fg = (pseudo_sem_scores[i][nonzero_inds] * (iou_max > fg_thresh).float()).sum(dim=0, keepdim=True) \
-                                       / torch.clamp((iou_max > fg_thresh).float().sum(dim=0, keepdim=True), min=1.0)
-                        sem_score_bg = (pseudo_sem_scores[i][nonzero_inds] * (iou_max < bg_thresh).float()).sum(dim=0, keepdim=True) \
-                                       / torch.clamp((iou_max < bg_thresh).float().sum(dim=0, keepdim=True), min=1.0)
-                        pseudo_fgs.append(fg)
-                        sem_score_fgs.append(sem_score_fg)
-                        sem_score_bgs.append(sem_score_bg)
-
-                        # only for 100% label
-                        if self.supervise_mode >= 1:
-                            filter = iou_max > 0.3
-                            asgn = asgn[filter]
-                            batch_dict['gt_boxes'][ind, ...][:] = torch.zeros_like(batch_dict['gt_boxes'][ind, ...][:])
-                            batch_dict['gt_boxes'][ind, ...][:len(asgn)] = ori_unlabeled_boxes[i, :].gather(dim=0, index=asgn.unsqueeze(-1).repeat(1, 8))
-
-                            if self.supervise_mode == 2:
-                                batch_dict['gt_boxes'][ind, ...][:len(asgn), 0:3] += 0.1 * torch.randn((len(asgn), 3), device=iou_max.device) * \
-                                                                                     batch_dict['gt_boxes'][ind, ...][
-                                                                                     :len(asgn), 3:6]
-                                batch_dict['gt_boxes'][ind, ...][:len(asgn), 3:6] += 0.1 * torch.randn((len(asgn), 3), device=iou_max.device) * \
-                                                                                     batch_dict['gt_boxes'][ind, ...][
-                                                                                     :len(asgn), 3:6]
-                    else:
-                        nan = torch.tensor([float('nan')], device=unlabeled_inds.device)
-                        sem_score_fgs.append(nan)
-                        sem_score_bgs.append(nan)
-                        pseudo_ious.append(nan)
-                        pseudo_accs.append(nan)
-                        pseudo_fgs.append(nan)
+                    nan = torch.tensor([float('nan')], device=unlabeled_inds.device)
+                    sem_score_fgs.append(nan)
+                    sem_score_bgs.append(nan)
+                    pseudo_ious.append(nan)
+                    pseudo_accs.append(nan)
+                    pseudo_fgs.append(nan)
 
             
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
-
+            
             if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
-                
-                # 1. Use Student's ROI head for Teacher's RPN head proposals (aka S for T)
+
+                # 1. Use Student's ROI head for Teacher's RPN head proposals (aka S for T) (Humble Teacher)
                 batch_dict_s_for_t = {}
                 batch_dict_s_for_t['rois'] = batch_dict_ema['rois'].data.clone()
                 batch_dict_s_for_t['roi_scores'] = batch_dict_ema['roi_scores'].data.clone()
@@ -214,16 +262,20 @@ class PVRCNN_SSL(Detector3DTemplate):
                 batch_dict_s_for_t['point_features'] = batch_dict['point_features'].data.clone()
                 batch_dict_s_for_t['point_coords'] = batch_dict['point_coords'].data.clone()
                 batch_dict_s_for_t['point_cls_scores'] = batch_dict['point_cls_scores'].data.clone()
-                # Pass gt_boxes (pseudo boxes for unlab samples)
+                # Pass gt_boxes (pseudo boxes for unlab samples), to be used in student's roi head
                 batch_dict_s_for_t['gt_boxes'] = batch_dict['gt_boxes'].data.clone()
 
                 # Apply Student's aug on Teacher's proposals
                 batch_dict_s_for_t = self.apply_augmentation(batch_dict_s_for_t, batch_dict, unlabeled_inds)
 
-                # disable_gt_roi_when_pseudo_labeling to be kept True in order to avoid new gt
-                self.pv_rcnn.roi_head.forward(batch_dict_s_for_t, disable_gt_roi_when_pseudo_labeling=False)   
+                # disable_gt_roi_when_pseudo_labeling to be kept false ?
+                self.pv_rcnn.roi_head.forward(batch_dict_s_for_t, disable_gt_roi_when_pseudo_labeling=False) 
+                # TODO : Bring back the final preds to original augmentation of teacher (reverse the aug)
+                
+                #! Need to clarify the need of postproc here from Farzad
                 pred_dicts_s_for_t, _ = self.pv_rcnn.post_processing(batch_dict_s_for_t,
                                                                 no_recall_dict=True, no_nms=True)
+
                 scores_, boxes_= [],[] 
                 for pred_dict in pred_dicts_s_for_t:
                     scores_.append(pred_dict['pred_scores'].unsqueeze(dim=0))
@@ -231,7 +283,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 pred_scores_s_for_t = torch.cat(scores_, dim=0)
                 pred_boxes_s_for_t = torch.cat(boxes_, dim=0)
 
-                # 2. Use Teacher's ROI head for Student's RPN head proposals (aka T for S)
+                # 2. Use Teacher's ROI head for Student's RPN head proposals (aka T for S) (Soft teacher)
                 with torch.no_grad():
                     batch_dict_t_for_s = {}
                     batch_dict_t_for_s['rois'] = batch_dict['rois'].data.clone()
@@ -248,19 +300,19 @@ class PVRCNN_SSL(Detector3DTemplate):
 
                     self.pv_rcnn_ema.roi_head.forward(batch_dict_t_for_s,
                                                       disable_gt_roi_when_pseudo_labeling=True)
+                    
+                    #! Need to clarify the need of postproc here from Farzad
                     pred_dicts_t_for_s, _ = self.pv_rcnn_ema.post_processing(batch_dict_t_for_s,
                                                                         no_recall_dict=True, no_nms=True)
 
                     scores_, boxes_= [],[] 
                     for pred_dict in pred_dicts_t_for_s:
                         scores_.append(pred_dict['pred_scores'].unsqueeze(dim=0))
-                        boxes_.append(pred_dict['pred_boxes'].unsqueeze(dim=0))
                     pred_scores_t_for_s = torch.cat(scores_, dim=0)
-                    pred_boxes_t_for_s = torch.cat(boxes_, dim=0)
                 
                     # 1: Calculate LU_CLS (Similar to soft-teacher-exp)
                     # Uses pred_scores_t_for_s and original rcnn scores of student
-                    # Reliability concept is already been taken care by soft-teacher's implementation in roi_head_template 
+                    # This loss is already implemented for soft-teacher.
                     self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = pred_scores_t_for_s.data.clone()
                     self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_mask'] = unlabeled_inds
 
@@ -297,6 +349,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
                                                       disable_gt_roi_when_pseudo_labeling=True)
 
+                    #! Need to clarify the need of postproc here from Farzad
                     pred_dicts_std, recall_dicts_std = self.pv_rcnn_ema.post_processing(batch_dict_std,
                                                                                 no_recall_dict=True, no_nms=True)
                     all_samples = []
@@ -318,7 +371,9 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             loss_rpn_box = loss_rpn_box[labeled_inds, ...].mean() + loss_rpn_box[unlabeled_inds, ...].mean() * self.unlabeled_weight
             loss_point = loss_point[labeled_inds, ...].mean()
-            if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False):
+            if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) \
+                or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False) \
+                    or self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
                 loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean() + loss_rcnn_cls[unlabeled_inds, ...].mean() * self.unlabeled_weight
             else:
                 loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean()
