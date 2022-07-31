@@ -60,7 +60,15 @@ class PVRCNN_SSL(Detector3DTemplate):
             # If ENABLE_RELIABILITY is True, run WA (Humble Teacher) along with original teacher 
             if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
                 # Create new dict for weakly aug.(WA) data for teacher - Eg. flip along x axis
-                batch_dict_ema_wa = copy.deepcopy(batch_dict_ema)
+                batch_dict_ema_wa = {}
+                keys = list(batch_dict.keys())
+                for k in keys:
+                    if k + '_ema_wa' in keys:
+                        continue
+                    if k.endswith('_ema_wa'):
+                        batch_dict_ema_wa[k[:-7]] = batch_dict[k]
+                    else:
+                        batch_dict_ema_wa[k] = batch_dict[k]
 
                 with torch.no_grad():
                     # self.pv_rcnn_ema.eval()  # Important! must be in train mode
@@ -68,7 +76,6 @@ class PVRCNN_SSL(Detector3DTemplate):
                         # Do not use RPN to produce rois for WA image, instead augment (eg. flip) 
                         # the proposal coord. of P horizontally to obtain P^
                         if cur_module.model_cfg['NAME']=='AnchorHeadSingle':
-
                             batch_dict_ema = cur_module(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
                             
                             # Eq. 6 & 7 from Humble Teacher
@@ -76,8 +83,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                             batch_dict_ema_wa['batch_box_preds'] = batch_dict_ema['batch_box_preds'].data.clone()
                             batch_dict_ema_wa['cls_preds_normalized'] = batch_dict_ema['cls_preds_normalized']
 
-                            batch_dict_ema_wa['batch_box_preds'][unlabeled_inds] = random_flip_along_x_bbox(batch_dict_ema_wa['batch_box_preds'][unlabeled_inds], 
-                                                                                                            batch_dict_ema_wa['flip_x'][unlabeled_inds])
+                            batch_dict_ema_wa['batch_box_preds'][unlabeled_inds] = random_flip_along_y_bbox(batch_dict_ema_wa['batch_box_preds'][unlabeled_inds], 
+                                                                                                            batch_dict_ema_wa['flip_y'][unlabeled_inds])
                          
                             batch_dict_ema_wa = cur_module(batch_dict_ema_wa, disable_gt_roi_when_pseudo_labeling=True)
                         else :
@@ -92,9 +99,10 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict_ema['mean_cls'] = (batch_dict_ema['rois'] + batch_dict_ema_wa['rois']) / 0.5
                     batch_dict_ema['mean_reg'] = (batch_dict_ema['roi_scores'] + batch_dict_ema_wa['roi_scores']) / 0.5
 
+                    # Compute variance proposal wise for cls/reg b/w batch_dict_ema and batch_dict_ema_wa for lab+unlab data
                     batch_dict_ema['var_cls'] = torch.var(torch.stack((batch_dict_ema['roi_scores'], 
                                                                         batch_dict_ema_wa['roi_scores'])), dim=1)
-                    # Compute variance proposal wise b/w batch_dict_ema and batch_dict_ema_wa for lab+unlab data
+                    
                     batch_dict_ema['var_reg'] = torch.var(torch.stack((batch_dict_ema['rois'], 
                                                                         batch_dict_ema_wa['rois'])), dim=1)
 

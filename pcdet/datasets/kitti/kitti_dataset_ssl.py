@@ -406,7 +406,7 @@ class KittiDatasetSSL(DatasetTemplate):
             for cur_sample in batch_list:
                 for key, val in cur_sample[1].items():
                     data_dict[key].append(val)
-            batch_size = len(batch_list) * 2
+            batch_size = len(batch_list) * 2    
         else:
             for cur_sample in batch_list:
                 for key, val in cur_sample.items():
@@ -416,15 +416,15 @@ class KittiDatasetSSL(DatasetTemplate):
 
         for key, val in data_dict.items():
             try:
-                if key in ['voxels', 'voxel_num_points', 'voxels_ema', 'voxel_num_points_ema']:
+                if key in ['voxels', 'voxel_num_points', 'voxels_ema', 'voxel_num_points_ema', 'voxels_ema_wa', 'voxel_num_points_ema_wa']:
                     ret[key] = np.concatenate(val, axis=0)
-                elif key in ['points', 'voxel_coords', 'points_ema', 'voxel_coords_ema']:
+                elif key in ['points', 'voxel_coords', 'points_ema', 'voxel_coords_ema', 'points_ema_wa', 'voxel_coords_ema_wa']:
                     coors = []
                     for i, coor in enumerate(val):
                         coor_pad = np.pad(coor, ((0, 0), (1, 0)), mode='constant', constant_values=i)
                         coors.append(coor_pad)
                     ret[key] = np.concatenate(coors, axis=0)
-                elif key in ['gt_boxes', 'gt_boxes_ema']:
+                elif key in ['gt_boxes', 'gt_boxes_ema', 'gt_boxes_ema_wa']:
                     max_gt = max([len(x) for x in val])
                     batch_gt_boxes3d = np.zeros((batch_size, max_gt, val[0].shape[-1]), dtype=np.float32)
                     for k in range(batch_size):
@@ -522,7 +522,12 @@ class KittiDatasetSSL(DatasetTemplate):
             gt_boxes_ema, points_ema, _ = global_rotation(gt_boxes_ema, points_ema, [-1, 1],
                                                           rot_angle_=-data_dict['rot_angle'])
             gt_boxes_ema, points_ema, _ = random_flip_along_x(gt_boxes_ema, points_ema, enable_=data_dict['flip_x'])
+            # Store this for weakly aug dataset for teacher ensemble
+            data_dict['points_ema_wa'] = points_ema
+            data_dict['gt_boxes_ema_wa'] = gt_boxes_ema    
+            
             gt_boxes_ema, points_ema, _ = random_flip_along_y(gt_boxes_ema, points_ema, enable_=data_dict['flip_y'])
+            # Store this for original dataset for teacher ensemble
             data_dict['points_ema'] = points_ema
             data_dict['gt_boxes_ema'] = gt_boxes_ema
 
@@ -532,6 +537,7 @@ class KittiDatasetSSL(DatasetTemplate):
             
             if self.training:
                 data_dict['gt_boxes_ema'] = data_dict['gt_boxes_ema'][selected]
+                data_dict['gt_boxes_ema_wa'] = data_dict['gt_boxes_ema_wa'][selected]
             data_dict['gt_names'] = data_dict['gt_names'][selected]
             gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
             gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
@@ -539,6 +545,9 @@ class KittiDatasetSSL(DatasetTemplate):
             if self.training:
                 gt_boxes_ema = np.concatenate((data_dict['gt_boxes_ema'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
                 data_dict['gt_boxes_ema'] = gt_boxes_ema
+
+                gt_boxes_ema_wa = np.concatenate((data_dict['gt_boxes_ema_wa'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
+                data_dict['gt_boxes_ema_wa'] = gt_boxes_ema_wa
 
         # print((data_dict['points'] ** 2).sum(), (data_dict['points_ema'] ** 2).sum()*(data_dict['scale']**2))
         if self.training:
@@ -558,6 +567,20 @@ class KittiDatasetSSL(DatasetTemplate):
             data_dict['voxels_ema'] = data_dict['voxels']
             data_dict['voxel_coords_ema'] = data_dict['voxel_coords']
             data_dict['voxel_num_points_ema'] = data_dict['voxel_num_points']
+
+            data_dict['points'] = data_dict['points_ema_wa']
+            data_dict['gt_boxes'] = data_dict['gt_boxes_ema_wa']
+
+            data_dict = self.point_feature_encoder.forward(data_dict)
+            data_dict = self.data_processor.forward(
+                data_dict=data_dict
+            )
+
+            data_dict['points_ema_wa'] = data_dict['points']
+            data_dict['gt_boxes_ema_wa'] = data_dict['gt_boxes']
+            data_dict['voxels_ema_wa'] = data_dict['voxels']
+            data_dict['voxel_coords_ema_wa'] = data_dict['voxel_coords']
+            data_dict['voxel_num_points_ema_wa'] = data_dict['voxel_num_points']
 
             data_dict['points'] = points
             data_dict['gt_boxes'] = gt_boxes
