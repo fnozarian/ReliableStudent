@@ -521,11 +521,17 @@ class KittiDatasetSSL(DatasetTemplate):
                                                          scale_=1/data_dict['scale'])
             gt_boxes_ema, points_ema, _ = global_rotation(gt_boxes_ema, points_ema, [-1, 1],
                                                           rot_angle_=-data_dict['rot_angle'])
-            gt_boxes_ema, points_ema, _ = random_flip_along_x(gt_boxes_ema, points_ema, enable_=data_dict['flip_x'])
-            # Store this for weakly aug dataset for teacher ensemble
-            data_dict['points_ema_wa'] = points_ema
-            data_dict['gt_boxes_ema_wa'] = gt_boxes_ema    
             
+            # Weakly augment the data for teacher ensemble 
+            points_ema_wa = points_ema.copy()
+            gt_boxes_ema_wa = gt_boxes_ema.copy()
+            # Apply random-flip-along-x on samples where it was not applied previously
+            rem_samples = ~data_dict['flip_x']
+            gt_boxes_ema_wa, points_ema_wa, _ = random_flip_along_x(gt_boxes_ema_wa, points_ema_wa, enable_=rem_samples)
+            data_dict['points_ema_wa'] = points_ema_wa
+            data_dict['gt_boxes_ema_wa'] = gt_boxes_ema_wa
+
+            gt_boxes_ema, points_ema, _ = random_flip_along_x(gt_boxes_ema, points_ema, enable_=data_dict['flip_x'])
             gt_boxes_ema, points_ema, _ = random_flip_along_y(gt_boxes_ema, points_ema, enable_=data_dict['flip_y'])
             # Store this for original dataset for teacher ensemble
             data_dict['points_ema'] = points_ema
