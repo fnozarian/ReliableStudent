@@ -83,8 +83,9 @@ class PVRCNN_SSL(Detector3DTemplate):
                             batch_dict_ema_wa['batch_box_preds'] = batch_dict_ema['batch_box_preds'].data.clone()
                             batch_dict_ema_wa['cls_preds_normalized'] = batch_dict_ema['cls_preds_normalized']
 
-                            batch_dict_ema_wa['batch_box_preds'][unlabeled_inds] = random_flip_along_y_bbox(batch_dict_ema_wa['batch_box_preds'][unlabeled_inds], 
-                                                                                                            batch_dict_ema_wa['flip_y'][unlabeled_inds])
+                            enable = torch.ones_like(batch_dict_ema_wa['flip_x'][unlabeled_inds])
+                            batch_dict_ema_wa['batch_box_preds'][unlabeled_inds] = random_flip_along_x_bbox(batch_dict_ema_wa['batch_box_preds'][unlabeled_inds], 
+                                                                                                            enables=enable)
                          
                             batch_dict_ema_wa = cur_module(batch_dict_ema_wa, disable_gt_roi_when_pseudo_labeling=True)
                         else :
@@ -291,81 +292,6 @@ class PVRCNN_SSL(Detector3DTemplate):
                 pred_scores_s_for_t = torch.cat(scores_, dim=0)
                 pred_boxes_s_for_t = torch.cat(boxes_, dim=0)
 
-                # 2. Use Teacher's ROI head for Student's RPN head proposals (aka T for S) (Soft teacher)
-                with torch.no_grad():
-                    batch_dict_t_for_s = {}
-                    batch_dict_t_for_s['rois'] = batch_dict['rois'].data.clone()
-                    batch_dict_t_for_s['roi_scores'] = batch_dict['roi_scores'].data.clone()
-                    batch_dict_t_for_s['roi_labels'] = batch_dict['roi_labels'].data.clone()
-                    batch_dict_t_for_s['has_class_labels'] = batch_dict['has_class_labels']
-                    batch_dict_t_for_s['batch_size'] = batch_dict['batch_size']
-                    batch_dict_t_for_s['point_features'] = batch_dict_ema['point_features'].data.clone()
-                    batch_dict_t_for_s['point_coords'] = batch_dict_ema['point_coords'].data.clone()
-                    batch_dict_t_for_s['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
-                    
-                    # Reverse Student's augmented ROI's for Teacher's ROI head
-                    batch_dict_t_for_s = self.reverse_augmentation(batch_dict_t_for_s, batch_dict, unlabeled_inds)
-
-                    self.pv_rcnn_ema.roi_head.forward(batch_dict_t_for_s,
-                                                      disable_gt_roi_when_pseudo_labeling=True)
-                    
-                    #! Need to clarify the need of postproc here from Farzad
-                    pred_dicts_t_for_s, _ = self.pv_rcnn_ema.post_processing(batch_dict_t_for_s,
-                                                                        no_recall_dict=True, no_nms=True)
-
-                    scores_, boxes_= [],[] 
-                    for pred_dict in pred_dicts_t_for_s:
-                        scores_.append(pred_dict['pred_scores'].unsqueeze(dim=0))
-                    pred_scores_t_for_s = torch.cat(scores_, dim=0)
-                
-                    # 1: Calculate LU_CLS (Similar to soft-teacher-exp)
-                    # Uses pred_scores_t_for_s and original rcnn scores of student
-                    # This loss is already implemented for soft-teacher.
-                    self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = pred_scores_t_for_s.data.clone()
-                    self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_mask'] = unlabeled_inds
-
-                    # 2: Calculate LU_ROI
-                    # Uses (pred_scores_s_for_t, pred_boxes_s_for_t) from student and (rcnn_cls, rcnn_reg) from teacher
-                    # TODO : take care of unlabeled inds
-                    # Total unsupervised loss = KL div loss on classification + L2 loss on regression 
-                    # apply jittering by augmentation to calc mean and st.d 
-            
-            if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
-                # using teacher to evaluate student's bg/fg proposals through its rcnn head
-                with torch.no_grad():
-                    # batch_dict_std = copy.deepcopy(batch_dict) # doesn't work
-                    batch_dict_std = {}
-                    batch_dict_std['rois'] = batch_dict['rois'].data.clone()
-                    batch_dict_std['roi_scores'] = batch_dict['roi_scores'].data.clone()
-                    batch_dict_std['roi_labels'] = batch_dict['roi_labels'].data.clone()
-                    batch_dict_std['has_class_labels'] = batch_dict['has_class_labels']
-                    batch_dict_std['batch_size'] = batch_dict['batch_size']
-                    batch_dict_std['point_features'] = batch_dict_ema['point_features'].data.clone()
-                    batch_dict_std['point_coords'] = batch_dict_ema['point_coords'].data.clone()
-                    batch_dict_std['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
-
-                    # reverse student's augmentation of rois
-                    batch_dict_std['rois'][unlabeled_inds] = global_scaling_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['scale'][unlabeled_inds])
-                    batch_dict_std['rois'][unlabeled_inds] = global_rotation_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['rot_angle'][unlabeled_inds])
-                    batch_dict_std['rois'][unlabeled_inds] = random_flip_along_y_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['flip_y'][unlabeled_inds])
-                    batch_dict_std['rois'][unlabeled_inds] = random_flip_along_x_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['flip_x'][unlabeled_inds])
-
-                    self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
-                                                      disable_gt_roi_when_pseudo_labeling=True)
-
-                    #! Need to clarify the need of postproc here from Farzad
-                    pred_dicts_std, recall_dicts_std = self.pv_rcnn_ema.post_processing(batch_dict_std,
-                                                                                no_recall_dict=True, no_nms=True)
-                    all_samples = []
-                    for pred_dict in pred_dicts_std:
-                        all_samples.append(pred_dict['pred_scores'].unsqueeze(dim=0))
-                    pred_scores_teacher = torch.cat(all_samples, dim=0)
-                    self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = pred_scores_teacher.data.clone()
-                    self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_mask'] = unlabeled_inds
 
             disp_dict = {}
             loss_rpn_cls, loss_rpn_box, tb_dict = self.pv_rcnn.dense_head.get_loss(scalar=False)
@@ -379,9 +305,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             loss_rpn_box = loss_rpn_box[labeled_inds, ...].mean() + loss_rpn_box[unlabeled_inds, ...].mean() * self.unlabeled_weight
             loss_point = loss_point[labeled_inds, ...].mean()
-            if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) \
-                or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False) \
-                    or self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
+            if self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False):
                 loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean() + loss_rcnn_cls[unlabeled_inds, ...].mean() * self.unlabeled_weight
             else:
                 loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean()
@@ -463,7 +387,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         # Use the true average until the exponential average is more correct
         alpha = min(1 - 1 / (self.global_step + 1), alpha)
         for ema_param, param in zip(self.pv_rcnn_ema.parameters(), self.pv_rcnn.parameters()):
-            ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
+            ema_param.data.mul_(alpha).add_((1 - alpha) * param.data)
 
     def load_params_from_file(self, filename, logger, to_cpu=False):
         if not os.path.isfile(filename):
