@@ -95,21 +95,39 @@ class PVRCNN_SSL(Detector3DTemplate):
                             except:
                                 batch_dict_ema = cur_module(batch_dict_ema)    
                                 batch_dict_ema_wa = cur_module(batch_dict_ema_wa)  
-                    
-                    # Eq. 8 and 9 from Humble Teacher - Compute mean proposal wise b/w batch_dict_ema and batch_dict_ema_wa for lab+unlab data
-                    batch_dict_ema['mean_cls'] = (batch_dict_ema['rois'] + batch_dict_ema_wa['rois']) / 0.5
-                    batch_dict_ema['mean_reg'] = (batch_dict_ema['roi_scores'] + batch_dict_ema_wa['roi_scores']) / 0.5
 
-                    # Compute variance proposal wise for cls/reg b/w batch_dict_ema and batch_dict_ema_wa for lab+unlab data
-                    batch_dict_ema['var_cls'] = torch.var(torch.stack((batch_dict_ema['roi_scores'], 
-                                                                        batch_dict_ema_wa['roi_scores'])), dim=1)
+                    # no_nms has been set to True to avoid the filtering and keep the o/p consistent with that of student
+                    pred_dicts_ema, _ = self.pv_rcnn_ema.post_processing(batch_dict_ema,
+                                                                            no_recall_dict=True, override_thresh=0.0, no_nms=True)
+                    pred_dicts_ema_wa, _ = self.pv_rcnn_ema.post_processing(batch_dict_ema_wa,
+                                                                            no_recall_dict=True, override_thresh=0.0, no_nms=True)
                     
-                    batch_dict_ema['var_reg'] = torch.var(torch.stack((batch_dict_ema['rois'], 
-                                                                        batch_dict_ema_wa['rois'])), dim=1)
+                    # Compute mean and variance of cls and reg for teacher ensemble
+                    for ind in unlabeled_inds:
+                        # Eq. 8 and 9 from Humble Teacher - Compute mean proposal wise b/w pred_dicts_ema and pred_dicts_ema_wa for unlab data
+                        pred_dicts_ema[ind]['mean_cls'] = (pred_dicts_ema[ind]['pred_scores'] \
+                                                                        + pred_dicts_ema_wa[ind]['pred_scores']) / 2
+                        pred_dicts_ema[ind]['mean_reg'] = (pred_dicts_ema[ind]['pred_boxes'] \
+                                                                        + pred_dicts_ema_wa[ind]['pred_boxes']) / 2
 
-                    # Update ema model's rois and roi_scores with teacher ensembled mean values of cls and reg
-                    batch_dict_ema['rois'][unlabeled_inds] = batch_dict_ema['mean_cls'][unlabeled_inds]
-                    batch_dict_ema['roi_scores'][unlabeled_inds] = batch_dict_ema['mean_reg'][unlabeled_inds]
+                        # Compute variance proposal wise for cls/reg b/w pred_dicts_ema and pred_dicts_ema_wa for unlab data
+                        pred_dicts_ema[ind]['var_cls'] = torch.var(torch.stack((pred_dicts_ema[ind]['pred_scores'], 
+                                                                            pred_dicts_ema_wa[ind]['pred_scores'])), dim=0)
+                        #! Clarify (FARZAD) : pred_boxes are of shape [N,7]. How is the var to be computed with 7 indices for each bbox
+                        pred_dicts_ema[ind]['var_reg'] = torch.var(torch.stack((pred_dicts_ema[ind]['pred_boxes'], 
+                                                                            pred_dicts_ema_wa[ind]['pred_boxes'])), dim=0)
+
+                        # Update ema model's pred_scores and pred_boxes with teacher ensembled mean values of cls and reg
+                        pred_dicts_ema[ind]['pred_scores'] = pred_dicts_ema[ind]['mean_cls']
+                        pred_dicts_ema[ind]['pred_boxes'] = pred_dicts_ema[ind]['mean_reg']
+
+                    # Used for unsup loss computation
+                    scores_, boxes_= [],[] 
+                    for pred_dict in pred_dicts_ema:
+                        scores_.append(pred_dict['pred_scores'].unsqueeze(dim=0))
+                        boxes_.append(pred_dict['pred_boxes'].unsqueeze(dim=0))
+                    pred_scores_ema = torch.cat(scores_, dim=0)   
+                    pred_boxes_ema = torch.cat(boxes_, dim=0) 
  
             # Else, run the original teacher only 
             else : 
@@ -119,20 +137,18 @@ class PVRCNN_SSL(Detector3DTemplate):
                             batch_dict_ema = cur_module(batch_dict_ema, disable_gt_roi_when_pseudo_labeling=True)
                         except:
                             batch_dict_ema = cur_module(batch_dict_ema)
-            
-            pred_dicts, recall_dicts = self.pv_rcnn_ema.post_processing(batch_dict_ema,
-                                                                        no_recall_dict=True, override_thresh=0.0, no_nms=self.no_nms)
-            #! TODO : Loss computation (KL div and L2 loss) using the variance weights above
+                pred_dicts_ema, recall_dicts_ema = self.pv_rcnn_ema.post_processing(batch_dict_ema,
+                                                                            no_recall_dict=True, override_thresh=0.0, no_nms=self.no_nms)
             
             pseudo_boxes = []
             pseudo_scores = []
             pseudo_sem_scores = []
             max_pseudo_box_num = 0
             for ind in unlabeled_inds:
-                pseudo_score = pred_dicts[ind]['pred_scores']
-                pseudo_box = pred_dicts[ind]['pred_boxes']
-                pseudo_label = pred_dicts[ind]['pred_labels']
-                pseudo_sem_score = pred_dicts[ind]['pred_sem_scores']
+                pseudo_score = pred_dicts_ema[ind]['pred_scores']
+                pseudo_box = pred_dicts_ema[ind]['pred_boxes']
+                pseudo_label = pred_dicts_ema[ind]['pred_labels']
+                pseudo_sem_score = pred_dicts_ema[ind]['pred_sem_scores']
 
                 if len(pseudo_label) == 0:
                     pseudo_boxes.append(pseudo_label.new_zeros((0, 8)).float())
@@ -140,7 +156,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     pseudo_scores.append(pseudo_label.new_zeros((1,)).float())
                     continue
 
-
+                #! Clarify : Need of these filterings of 3diou 
                 conf_thresh = torch.tensor(self.thresh, device=pseudo_label.device).unsqueeze(
                     0).repeat(len(pseudo_label), 1).gather(dim=1, index=(pseudo_label-1).unsqueeze(-1))
 
@@ -152,6 +168,26 @@ class PVRCNN_SSL(Detector3DTemplate):
                 pseudo_box = pseudo_box[valid_inds]
                 pseudo_label = pseudo_label[valid_inds]
                 pseudo_score = pseudo_score[valid_inds]
+
+                # TODO : Two stage filtering instead of applying NMS 
+                # Stage1 based on size of bbox, Stage2 is objectness thresholding
+                # Note : Two stages happen sequentially, and not independently. 
+                # vol_boxes = ((pseudo_box[:, 3] * pseudo_box[:, 4] * pseudo_box[:, 5])/torch.abs(pseudo_box[:,2][0])).view(-1)
+                # vol_boxes, _ = torch.sort(vol_boxes, descending=True)
+                # # Set volume threshold to 10% of the maximum volume of the boxes
+                # keep_ind = int(self.model_cfg.PSEUDO_TWO_STAGE_FILTER.MAX_VOL_PROP * len(vol_boxes))
+                # keep_vol = vol_boxes[keep_ind]
+                # valid_inds = vol_boxes > keep_vol # Stage 1
+                # pseudo_sem_score = pseudo_sem_score[valid_inds]
+                # pseudo_box = pseudo_box[valid_inds]
+                # pseudo_label = pseudo_label[valid_inds]
+                # pseudo_score = pseudo_score[valid_inds]
+
+                # valid_inds = pseudo_score > self.model_cfg.PSEUDO_TWO_STAGE_FILTER.THRESH # Stage 2
+                # pseudo_sem_score = pseudo_sem_score[valid_inds]
+                # pseudo_box = pseudo_box[valid_inds]
+                # pseudo_label = pseudo_label[valid_inds]
+                # pseudo_score = pseudo_score[valid_inds]
 
                 pseudo_boxes.append(torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1))
                 pseudo_sem_scores.append(pseudo_sem_score)
@@ -258,7 +294,8 @@ class PVRCNN_SSL(Detector3DTemplate):
             
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
-            
+            # TODO : Store forward_ret_dict of student's ROI for rcnn sup loss computation
+
             if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
 
                 # 1. Use Student's ROI head for Teacher's RPN head proposals (aka S for T) (Humble Teacher)
@@ -274,14 +311,16 @@ class PVRCNN_SSL(Detector3DTemplate):
                 # Pass gt_boxes (pseudo boxes for unlab samples), to be used in student's roi head
                 batch_dict_s_for_t['gt_boxes'] = batch_dict['gt_boxes'].data.clone()
 
-                # Apply Student's aug on Teacher's proposals
-                batch_dict_s_for_t = self.apply_augmentation(batch_dict_s_for_t, batch_dict, unlabeled_inds)
+                # Apply Student's aug on Teacher's proposals 
+                batch_dict_s_for_t = self.apply_augmentation(batch_dict_s_for_t, batch_dict, unlabeled_inds, key='rois')
 
-                # disable_gt_roi_when_pseudo_labeling to be kept false ?
-                self.pv_rcnn.roi_head.forward(batch_dict_s_for_t, disable_gt_roi_when_pseudo_labeling=False) 
-                # TODO : Bring back the final preds to original augmentation of teacher (reverse the aug)
+                # disable_gt_roi_when_pseudo_labeling kept True to avoid assigning targets
+                self.pv_rcnn.roi_head.forward(batch_dict_s_for_t, disable_gt_roi_when_pseudo_labeling=True) 
                 
-                #! Need to clarify the need of postproc here from Farzad
+                # Bring back the final preds to original augmentation of teacher (reverse the aug)
+                batch_dict_s_for_t = self.reverse_augmentation(batch_dict_s_for_t, batch_dict, unlabeled_inds, key='batch_box_preds')
+                
+                # no_nms has been set to True to avoid the filtering and keep the o/p consistent with that of teacher ema
                 pred_dicts_s_for_t, _ = self.pv_rcnn.post_processing(batch_dict_s_for_t,
                                                                 no_recall_dict=True, no_nms=True)
 
@@ -292,6 +331,23 @@ class PVRCNN_SSL(Detector3DTemplate):
                 pred_scores_s_for_t = torch.cat(scores_, dim=0)
                 pred_boxes_s_for_t = torch.cat(boxes_, dim=0)
 
+                # ROI UNSUP LOSS: Uses (pred_scores_s_for_t,pred_boxes_s_for_t) from student & (pred_scores_ema,pred_boxes_ema) from teacher
+                # Cls Loss : Uses (pred_scores_s_for_t) from student & (pred_scores_ema) from teacher
+                student_prob = pred_scores_s_for_t[unlabeled_inds, :].clamp(1e-4, 1-1e-4) 
+                teacher_prob = pred_scores_ema[unlabeled_inds, :].clamp(1e-4, 1-1e-4) 
+                student_prob = torch.cat([1-student_prob, student_prob], dim=-1)
+                teacher_prob = torch.cat([1-teacher_prob, teacher_prob], dim=-1) 
+                #! Clarify : reduce set to False to perform KL Div element wise, but leads to 200 entries as o/p
+                loss_unsup_rcnn_cls = F.kl_div(torch.log(student_prob), teacher_prob) 
+                # weighted_loss_unsup_rcnn_cls = pred_dicts_ema['var_cls'][unlabeled_inds, :] * roi_unsup_cls_loss
+                
+                # TODO : Reg Loss : Uses (pred_boxes_s_for_t) from student & (pred_boxes_ema) from teacher
+                # loss_unsup_rcnn_reg
+                # weighted_loss_unsup_rcnn_reg
+
+                #! Clarify : How to use var_cls/var_reg which are proposal wise, wehreas losses are scalars
+                # rcnn unsup loss = (var_cls*KL div loss on cls) + (var_reg*L2 loss on regression)
+                # loss_unsup_rcnn = weighted_loss_unsup_rcnn_cls + weighted_loss_unsup_rcnn_reg
 
             disp_dict = {}
             loss_rpn_cls, loss_rpn_box, tb_dict = self.pv_rcnn.dense_head.get_loss(scalar=False)
@@ -350,26 +406,26 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             return pred_dicts, recall_dicts, {}
 
-    def apply_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds):
-        batch_dict['rois'][unlabeled_inds] = random_flip_along_x_bbox(
-            batch_dict['rois'][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
-        batch_dict['rois'][unlabeled_inds] = random_flip_along_y_bbox(
-            batch_dict['rois'][unlabeled_inds], batch_dict_org['flip_y'][unlabeled_inds])
-        batch_dict['rois'][unlabeled_inds] = global_rotation_bbox(
-            batch_dict['rois'][unlabeled_inds], batch_dict_org['rot_angle'][unlabeled_inds])
-        batch_dict['rois'][unlabeled_inds] = global_scaling_bbox(
-            batch_dict['rois'][unlabeled_inds], batch_dict_org['scale'][unlabeled_inds])
+    def apply_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key = 'rois'):
+        batch_dict[key][unlabeled_inds] = random_flip_along_x_bbox(
+            batch_dict[key][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
+        batch_dict[key][unlabeled_inds] = random_flip_along_y_bbox(
+            batch_dict[key][unlabeled_inds], batch_dict_org['flip_y'][unlabeled_inds])
+        batch_dict[key][unlabeled_inds] = global_rotation_bbox(
+            batch_dict[key][unlabeled_inds], batch_dict_org['rot_angle'][unlabeled_inds])
+        batch_dict[key][unlabeled_inds] = global_scaling_bbox(
+            batch_dict[key][unlabeled_inds], batch_dict_org['scale'][unlabeled_inds])
         return batch_dict
     
-    def reverse_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds):
-        batch_dict['rois'][unlabeled_inds] = global_scaling_bbox(
-            batch_dict['rois'][unlabeled_inds], batch_dict_org['scale'][unlabeled_inds])
-        batch_dict['rois'][unlabeled_inds] = global_rotation_bbox(
-            batch_dict['rois'][unlabeled_inds], batch_dict_org['rot_angle'][unlabeled_inds])
-        batch_dict['rois'][unlabeled_inds] = random_flip_along_y_bbox(
-            batch_dict['rois'][unlabeled_inds], batch_dict_org['flip_y'][unlabeled_inds])
-        batch_dict['rois'][unlabeled_inds] = random_flip_along_x_bbox(
-            batch_dict['rois'][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
+    def reverse_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key = 'rois'):
+        batch_dict[key][unlabeled_inds] = global_scaling_bbox(
+            batch_dict[key][unlabeled_inds], batch_dict_org['scale'][unlabeled_inds])
+        batch_dict[key][unlabeled_inds] = global_rotation_bbox(
+            batch_dict[key][unlabeled_inds], batch_dict_org['rot_angle'][unlabeled_inds])
+        batch_dict[key][unlabeled_inds] = random_flip_along_y_bbox(
+            batch_dict[key][unlabeled_inds], batch_dict_org['flip_y'][unlabeled_inds])
+        batch_dict[key][unlabeled_inds] = random_flip_along_x_bbox(
+            batch_dict[key][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
         return batch_dict
 
     def get_supervised_training_loss(self):
