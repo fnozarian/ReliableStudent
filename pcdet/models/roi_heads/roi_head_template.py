@@ -104,10 +104,29 @@ class RoIHeadTemplate(nn.Module):
         batch_dict.pop('batch_index', None)
         return batch_dict
 
-    def assign_targets(self, batch_dict):
-        batch_size = batch_dict['batch_size']
+    def assign_targets(self, batch_dict, override_unlabeled_targets=False):
+
         with torch.no_grad():
             targets_dict = self.proposal_target_layer.forward(batch_dict)
+
+        if override_unlabeled_targets:
+            assert batch_dict['rois'].shape[1] == targets_dict['rois'].shape[1], 'Num. of rois should be the same in ' \
+                                                                                 'ROI_PER_IMAGE and NMS_POST_MAXSIZE '
+
+            unlabeled_inds = batch_dict['unlabeled_inds']
+            targets_dict['rois'][unlabeled_inds] = batch_dict['rois'][unlabeled_inds]
+            targets_dict['gt_of_rois'][unlabeled_inds] = batch_dict['gt_boxes'][unlabeled_inds]
+            targets_dict['roi_scores'][unlabeled_inds] = batch_dict['roi_scores'][unlabeled_inds]
+            targets_dict['roi_labels'][unlabeled_inds] = batch_dict['roi_labels'][unlabeled_inds]
+            # TODO(farzad) can we do better here than assigning ones? Maybe based on our reliability weighting scores?
+            targets_dict['reg_valid_mask'][unlabeled_inds] = torch.ones_like(
+                targets_dict['reg_valid_mask'][unlabeled_inds])
+            targets_dict['rcnn_cls_labels'][unlabeled_inds] = torch.ones_like(
+                targets_dict['rcnn_cls_labels'][unlabeled_inds])
+            targets_dict['gt_iou_of_rois'][unlabeled_inds] = torch.ones_like(
+                targets_dict['gt_iou_of_rois'][unlabeled_inds])
+
+        batch_size = batch_dict['batch_size']
 
         rois = targets_dict['rois']  # (B, N, 7 + C)
         gt_of_rois = targets_dict['gt_of_rois']  # (B, N, 7 + C + 1)

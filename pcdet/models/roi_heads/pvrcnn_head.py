@@ -149,7 +149,7 @@ class PVRCNNHead(RoIHeadTemplate):
         targets_dict = self.proposal_layer(batch_dict, nms_config=nms_mode)
         # should not use gt_roi for pseudo label generation
         if (self.training or self.print_loss_when_eval) and not disable_gt_roi_when_pseudo_labeling:
-            targets_dict = self.assign_targets(batch_dict)
+            targets_dict = self.assign_targets(batch_dict, override_unlabeled_targets=True)
             batch_dict['rois'] = targets_dict['rois']
             batch_dict['roi_scores'] = targets_dict['roi_scores']
             batch_dict['roi_labels'] = targets_dict['roi_labels']
