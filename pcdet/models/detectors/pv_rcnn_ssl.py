@@ -357,7 +357,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             _mean_and_var(batch_dict_a, batch_dict_b, unlabeled_inds,
                           keys=('batch_cls_preds', 'batch_box_preds'))
 
-        elif ensemble_option == 'mean_post_nms' or ensemble_option == 'mean_no_nms':
+        elif ensemble_option == 'mean_no_nms':
             # no_nms has been set to True to avoid the filtering and keep the o/p consistent with that of student
 
             pred_dicts_a, _ = self.pv_rcnn_ema.post_processing(batch_dict_a, no_recall_dict=True, no_nms=True)
