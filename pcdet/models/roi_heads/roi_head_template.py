@@ -114,17 +114,20 @@ class RoIHeadTemplate(nn.Module):
                                                                                  'ROI_PER_IMAGE and NMS_POST_MAXSIZE '
 
             unlabeled_inds = batch_dict['unlabeled_inds']
+            targets_dict['unlabeled_inds'] = unlabeled_inds
             targets_dict['rois'][unlabeled_inds] = batch_dict['rois'][unlabeled_inds]
             targets_dict['gt_of_rois'][unlabeled_inds] = batch_dict['gt_boxes'][unlabeled_inds]
             targets_dict['roi_scores'][unlabeled_inds] = batch_dict['roi_scores'][unlabeled_inds]
             targets_dict['roi_labels'][unlabeled_inds] = batch_dict['roi_labels'][unlabeled_inds]
+            if 'batch_cls_preds_var' in batch_dict.keys():
+                targets_dict['batch_cls_preds_var'] = batch_dict['batch_cls_preds_var']
+            if 'batch_box_preds_var' in batch_dict.keys():
+                targets_dict['batch_box_preds_var'] = batch_dict['batch_box_preds_var']
             # TODO(farzad) can we do better here than assigning ones? Maybe based on our reliability weighting scores?
             targets_dict['reg_valid_mask'][unlabeled_inds] = torch.ones_like(
                 targets_dict['reg_valid_mask'][unlabeled_inds])
             targets_dict['rcnn_cls_labels'][unlabeled_inds] = torch.ones_like(
                 targets_dict['rcnn_cls_labels'][unlabeled_inds])
-            targets_dict['gt_iou_of_rois'][unlabeled_inds] = torch.ones_like(
-                targets_dict['gt_iou_of_rois'][unlabeled_inds])
 
         batch_size = batch_dict['batch_size']
 
@@ -159,12 +162,21 @@ class RoIHeadTemplate(nn.Module):
         loss_cfgs = self.model_cfg.LOSS_CONFIG
         code_size = self.box_coder.code_size
 
+        unlabeled_inds = forward_ret_dict['unlabeled_inds']
         reg_valid_mask = forward_ret_dict['reg_valid_mask'].view(-1)
         gt_boxes3d_ct = forward_ret_dict['gt_of_rois'][..., 0:code_size]
         gt_of_rois_src = forward_ret_dict['gt_of_rois_src'][..., 0:code_size].view(-1, code_size)
         rcnn_reg = forward_ret_dict['rcnn_reg']  # (rcnn_batch_size, C)
         roi_boxes3d = forward_ret_dict['rois']
         rcnn_batch_size = gt_boxes3d_ct.view(-1, code_size).shape[0]
+
+        if 'batch_box_preds_var' in forward_ret_dict.keys():
+            batch_box_preds_var = forward_ret_dict['batch_box_preds_var']
+            box_var = torch.ones_like(batch_box_preds_var)
+            box_var[unlabeled_inds] = forward_ret_dict['batch_box_preds_var'][unlabeled_inds]
+            box_var = box_var.view_as(rcnn_reg)
+        else:
+            box_var = torch.ones_like(rcnn_reg)
 
         batch_size = forward_ret_dict['reg_valid_mask'].shape[0]
 
@@ -194,8 +206,10 @@ class RoIHeadTemplate(nn.Module):
                                 / max(fg_sum, 1)
             else:
                 fg_sum_ = fg_mask.reshape(batch_size, -1).long().sum(-1)
-                rcnn_loss_reg = (rcnn_loss_reg.view(rcnn_batch_size, -1) * fg_mask.unsqueeze(dim=-1).float()) \
-                                    .reshape(batch_size, -1).sum(-1) / torch.clamp(fg_sum_.float(), min=1.0)
+                rcnn_loss_reg = (rcnn_loss_reg.view(rcnn_batch_size, -1) *
+                                 fg_mask.unsqueeze(dim=-1).float() *
+                                 (1 / box_var)
+                                 ).reshape(batch_size, -1).sum(-1) / torch.clamp(fg_sum_.float(), min=1.0)
             rcnn_loss_reg = rcnn_loss_reg * loss_cfgs.LOSS_WEIGHTS['rcnn_reg_weight']
             tb_dict['rcnn_loss_reg'] = rcnn_loss_reg.item() if scalar else rcnn_loss_reg
 

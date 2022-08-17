@@ -276,6 +276,10 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict['roi_scores'] = batch_dict_ema['roi_scores'].detach().clone()
                     batch_dict['roi_labels'] = batch_dict_ema['roi_labels'].detach().clone()
                     batch_dict['has_class_labels'] = batch_dict_ema['has_class_labels']
+                    batch_dict['batch_cls_preds_var'] = batch_dict_ema[
+                        'batch_cls_preds_var'].detach().clone() if 'batch_cls_preds_var' in batch_dict_ema.keys() else None
+                    batch_dict['batch_box_preds_var'] = batch_dict_ema[
+                        'batch_box_preds_var'].detach().clone() if 'batch_box_preds_var' in batch_dict_ema.keys() else None
                     batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='rois')
                     boxes, labels, _, _ = self._unpack_predictions(pred_dicts_ema_no_nms, unlabeled_inds)
                     pseudo_boxes = [torch.cat([box, label.unsqueeze(-1)], dim=-1) for box, label in zip(boxes, labels)]
