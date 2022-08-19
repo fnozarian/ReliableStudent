@@ -44,15 +44,24 @@ def _to_list_of_dicts(dict_of_tensors, batch_size):
 
 def _mean_and_var(batch_dict_a, batch_dict_b, unlabeled_inds, keys=()):
     # !!! Note that the function is inplace !!!
-    for k in keys:
-        batch_dict_mean_k = torch.zeros_like(batch_dict_a[k])
-        batch_dict_emas = torch.stack([batch_dict_a[k][unlabeled_inds], batch_dict_b[k][unlabeled_inds]], dim=-1)
-        batch_dict_mean_k[unlabeled_inds] = torch.mean(batch_dict_emas, dim=-1)
-        batch_dict_a[k + '_mean'] = batch_dict_mean_k
-        batch_dict_var_k = torch.zeros_like(batch_dict_a[k])
-        batch_dict_var_k[unlabeled_inds] = torch.var(batch_dict_emas, dim=-1)
-        batch_dict_a[k + '_var'] = batch_dict_var_k
+    if isinstance(batch_dict_a, dict) and isinstance(batch_dict_b, dict):
+        for k in keys:
+            batch_dict_mean_k = torch.zeros_like(batch_dict_a[k])
+            batch_dict_emas = torch.stack([batch_dict_a[k][unlabeled_inds], batch_dict_b[k][unlabeled_inds]], dim=-1)
+            batch_dict_mean_k[unlabeled_inds] = torch.mean(batch_dict_emas, dim=-1)
+            batch_dict_a[k + '_mean'] = batch_dict_mean_k
+            batch_dict_var_k = torch.zeros_like(batch_dict_a[k])
+            batch_dict_var_k[unlabeled_inds] = torch.var(batch_dict_emas, dim=-1)
+            batch_dict_a[k + '_var'] = batch_dict_var_k
 
+    elif isinstance(batch_dict_a, list) and isinstance(batch_dict_b, list):
+        for ind in unlabeled_inds:
+            for k in keys:
+                batch_dict_emas = torch.stack([batch_dict_a[ind][k], batch_dict_b[ind][k]], dim=-1)
+                batch_dict_a[ind][k + '_mean'] = torch.mean(batch_dict_emas, dim=-1)
+                batch_dict_a[ind][k + '_var'] = torch.var(batch_dict_emas, dim=-1)
+    else:
+        raise TypeError
 
 def _normalize_scores(batch_dict, score_keys=('batch_cls_preds',)):
     # !!! Note that the function is inplace !!!
@@ -183,7 +192,6 @@ class PVRCNN_SSL(Detector3DTemplate):
                                                                    ensemble_option='mean_pre_nms')
                     if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
                         # pseudo-labels used for training roi head
-                        # TODO(farzad) BUG! only unlabeled data should have no nms. Currently both (un)labeled have no nms.
                         pred_dicts_ens_no_nms = self.ensemble_post_processing(batch_dict_ema, batch_dict_ema_wa,
                                                                               unlabeled_inds,
                                                                               ensemble_option='mean_no_nms')
@@ -197,7 +205,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                             batch_dict_ema = cur_module(batch_dict_ema)
                 pred_dicts_ens, recall_dicts_ema = self.pv_rcnn_ema.post_processing(batch_dict_ema, no_recall_dict=True,
                                                                                     override_thresh=0.0,
-                                                                                    no_nms=self.no_nms)
+                                                                                    no_nms_for_unlabeled=self.no_nms)
 
             pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
                 self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
@@ -383,16 +391,15 @@ class PVRCNN_SSL(Detector3DTemplate):
         elif ensemble_option == 'mean_no_nms':
             # no_nms has been set to True to avoid the filtering and keep the o/p consistent with that of student
 
-            pred_dicts_a, _ = self.pv_rcnn_ema.post_processing(batch_dict_a, no_recall_dict=True, no_nms=True)
-            pred_dicts_b, _ = self.pv_rcnn_ema.post_processing(batch_dict_b, no_recall_dict=True, no_nms=True)
-            pred_dicts_a = _to_dict_of_tensors(pred_dicts_a)
-            pred_dicts_b = _to_dict_of_tensors(pred_dicts_b)
+            pred_dicts_a, _ = self.pv_rcnn_ema.post_processing(batch_dict_a, no_recall_dict=True, no_nms_for_unlabeled=True)
+            pred_dicts_b, _ = self.pv_rcnn_ema.post_processing(batch_dict_b, no_recall_dict=True, no_nms_for_unlabeled=True)
             _mean_and_var(pred_dicts_a, pred_dicts_b, unlabeled_inds, keys=('pred_scores', 'pred_boxes'))
             # replace original values with mean values
-            for key in ['pred_scores', 'pred_boxes']:
-                pred_dicts_a[key][unlabeled_inds] = pred_dicts_a[key + '_mean'][unlabeled_inds]
-                pred_dicts_a.pop(key + '_mean')
-            ens_pred_dicts = _to_list_of_dicts(pred_dicts_a, batch_size=batch_dict_a['batch_size'])
+            for ind in unlabeled_inds:
+                for key in ['pred_scores', 'pred_boxes']:
+                    pred_dicts_a[ind][key] = pred_dicts_a[ind][key + '_mean']
+                    pred_dicts_a[ind].pop(key + '_mean')
+            ens_pred_dicts = pred_dicts_a
 
         elif ensemble_option == 'weighted_mean':
             _weighted_mean(batch_dict_a, batch_dict_b, unlabeled_inds, keys=('batch_cls_preds', 'batch_box_preds'))
