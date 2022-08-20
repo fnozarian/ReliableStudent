@@ -293,13 +293,13 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='rois_ema')
                     boxes, labels, scores, sem_scores, boxes_var, scores_var = self._unpack_predictions(pred_dicts_ens_no_nms, unlabeled_inds)
                     pseudo_boxes = [torch.cat([box, label.unsqueeze(-1)], dim=-1) for box, label in zip(boxes, labels)]
-                    batch_dict['rcnn_cls_labels'] = torch.zeros_like(batch_dict['roi_scores_ema'])
-                    batch_dict['rcnn_cls_labels_var'] = torch.zeros_like(batch_dict['roi_scores_ema'])
-                    batch_dict['gt_of_rois_var'] = torch.zeros_like(batch_dict['rois_ema'])
+                    batch_dict['pred_scores_ema'] = torch.zeros_like(batch_dict['roi_scores_ema'])
+                    batch_dict['pred_scores_ema_var'] = torch.zeros_like(batch_dict['roi_scores_ema'])
+                    batch_dict['pred_boxes_ema_var'] = torch.zeros_like(batch_dict['rois_ema'])
                     for i, ui in enumerate(unlabeled_inds):
-                        batch_dict['rcnn_cls_labels'][ui] = scores[i]
-                        batch_dict['rcnn_cls_labels_var'][ui] = scores_var[i]
-                        batch_dict['gt_of_rois_var'] = boxes_var[i]
+                        batch_dict['pred_scores_ema'][ui] = scores[i]
+                        batch_dict['pred_scores_ema_var'][ui] = scores_var[i]
+                        batch_dict['pred_boxes_ema_var'] = boxes_var[i]
 
                     self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
 

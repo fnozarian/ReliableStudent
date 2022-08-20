@@ -119,11 +119,11 @@ class RoIHeadTemplate(nn.Module):
             targets_dict['roi_scores'][unlabeled_inds] = batch_dict['roi_scores_ema'][unlabeled_inds]
             targets_dict['roi_labels'][unlabeled_inds] = batch_dict['roi_labels_ema'][unlabeled_inds]
             targets_dict['gt_of_rois'][unlabeled_inds] = batch_dict['gt_boxes'][unlabeled_inds]
-            targets_dict['rcnn_cls_labels'][unlabeled_inds] = batch_dict['rcnn_cls_labels'][unlabeled_inds]
-            if 'rcnn_cls_labels_var' in batch_dict.keys():
-                targets_dict['rcnn_cls_labels_var'] = batch_dict['rcnn_cls_labels_var'][unlabeled_inds]
-            if 'gt_of_rois_var' in batch_dict.keys():
-                targets_dict['gt_of_rois_var'] = batch_dict['gt_of_rois_var'][unlabeled_inds]
+            targets_dict['rcnn_cls_labels'][unlabeled_inds] = batch_dict['pred_scores_ema'][unlabeled_inds]
+            if 'pred_scores_ema_var' in batch_dict.keys():
+                targets_dict['rcnn_cls_labels_var'] = batch_dict['pred_scores_ema_var'][unlabeled_inds]
+            if 'pred_boxes_ema_var' in batch_dict.keys():
+                targets_dict['gt_of_rois_var'] = batch_dict['pred_boxes_ema_var'][unlabeled_inds]
 
             # TODO(farzad) can we do better here than assigning ones? Maybe based on our reliability weighting scores?
             targets_dict['reg_valid_mask'][unlabeled_inds] = torch.ones_like(
