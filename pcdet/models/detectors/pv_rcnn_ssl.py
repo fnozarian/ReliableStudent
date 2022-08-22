@@ -299,7 +299,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     for i, ui in enumerate(unlabeled_inds):
                         batch_dict['pred_scores_ema'][ui] = scores[i]
                         batch_dict['pred_scores_ema_var'][ui] = scores_var[i]
-                        batch_dict['pred_boxes_ema_var'] = boxes_var[i]
+                        batch_dict['pred_boxes_ema_var'][ui] = boxes_var[i]
 
                     self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
 

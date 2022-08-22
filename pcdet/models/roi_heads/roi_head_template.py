@@ -170,10 +170,10 @@ class RoIHeadTemplate(nn.Module):
         roi_boxes3d = forward_ret_dict['rois']
         rcnn_batch_size = gt_boxes3d_ct.view(-1, code_size).shape[0]
 
-        if 'batch_box_preds_var' in forward_ret_dict.keys() and loss_cfgs.get('USE_BOX_REG_VAR', False):
-            batch_box_preds_var = forward_ret_dict['batch_box_preds_var']
-            box_var = torch.ones_like(batch_box_preds_var)
-            box_var[unlabeled_inds] = forward_ret_dict['batch_box_preds_var'][unlabeled_inds]
+        if 'gt_of_rois_var' in forward_ret_dict.keys() and loss_cfgs.get('USE_BOX_REG_VAR', False):
+            gt_of_rois_var = forward_ret_dict['gt_of_rois_var']
+            box_var = torch.ones_like(gt_of_rois_var)
+            box_var[unlabeled_inds] = gt_of_rois_var[unlabeled_inds]
             box_var = box_var.view_as(rcnn_reg)
         else:
             box_var = torch.ones_like(rcnn_reg)
