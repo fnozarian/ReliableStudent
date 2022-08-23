@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from pcdet.datasets.augmentor.augmentor_utils import *
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
-
+from pcdet.utils.stat_analyses import *
 from ...utils import common_utils
 from .detector3d_template import Detector3DTemplate
 
@@ -74,8 +74,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                 for ind in unlabeled_inds:
                     pseudo_score = pred_dicts[ind]['pred_scores']
                     pseudo_box = pred_dicts[ind]['pred_boxes']
-                    pseudo_label = pred_dicts[ind]['pred_labels']
-                    pseudo_sem_score = pred_dicts[ind]['pred_sem_scores']
+                    pseudo_label = pred_dicts[ind]['pred_labels']  # this comes from RPN
+                    pseudo_sem_score = pred_dicts[ind]['pred_sem_scores']  # RPN's score
 
                     if len(pseudo_label) == 0:
                         pseudo_boxes.append(pseudo_label.new_zeros((0, 8)).float())
@@ -151,8 +151,11 @@ class PVRCNN_SSL(Detector3DTemplate):
                 pseudo_fgs = []
                 sem_score_fgs = []
                 sem_score_bgs = []
+                miss_rate = []
                 for i, ind in enumerate(unlabeled_inds):
                     # statistics
+                    miss_rate.append(get_miss_rate(ori_unlabeled_boxes[i, :], batch_dict['gt_boxes'][ind, ...]
+                                     , threshold=self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']))
                     anchor_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(
                         batch_dict['gt_boxes'][ind, ...][:, 0:7],
                         ori_unlabeled_boxes[i, :, 0:7])
@@ -197,6 +200,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                         pseudo_ious.append(nan)
                         pseudo_accs.append(nan)
                         pseudo_fgs.append(nan)
+                        miss_rate.append(nan)
 
 
             for cur_module in self.pv_rcnn.module_list:
@@ -278,6 +282,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             tb_dict_['pseudo_accs'] = _mean(pseudo_accs)
             tb_dict_['sem_score_fg'] = _mean(sem_score_fgs)
             tb_dict_['sem_score_bg'] = _mean(sem_score_bgs)
+            tb_dict_['miss_rate'] = _mean(miss_rate)
 
             tb_dict_['max_box_num'] = max_box_num
             tb_dict_['max_pseudo_box_num'] = max_pseudo_box_num
