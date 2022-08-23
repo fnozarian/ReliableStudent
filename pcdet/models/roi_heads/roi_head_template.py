@@ -104,30 +104,81 @@ class RoIHeadTemplate(nn.Module):
         batch_dict.pop('batch_index', None)
         return batch_dict
 
+    def _override_unlabeled_target(self, targets_dict, batch_dict):
+        # merge rois_ema with rois in targets_dict
+        unlabeled_inds = batch_dict['unlabeled_inds']
+        targets_dict['unlabeled_inds'] = unlabeled_inds
+        num_rois = targets_dict['rois'].shape[1]
+        num_rois_ema = batch_dict['rois_ema'].shape[1]
+
+        # TODO(farzad) Expand the targets_dict tensors better/compacter.
+        if num_rois_ema > num_rois:  # Expand targets_dict tensors to hold teacher's rois
+            code_size = targets_dict['rois'].shape[-1]
+            batch_size = batch_dict['batch_size']
+
+            labeled_inds = torch.nonzero(batch_dict['labeled_mask']).squeeze(1).long()
+
+            batch_rois = targets_dict['rois'].new_zeros(batch_size, num_rois_ema, code_size)
+            batch_rois[labeled_inds, :num_rois] = targets_dict['rois'][labeled_inds]
+            targets_dict['rois'] = batch_rois
+
+            batch_gt_of_rois = targets_dict['gt_of_rois'].new_zeros(batch_size, num_rois_ema, code_size + 1)
+            batch_gt_of_rois[labeled_inds, :num_rois] = targets_dict['gt_of_rois'][labeled_inds]
+            targets_dict['gt_of_rois'] = batch_gt_of_rois
+
+            batch_gt_iou_of_rois = targets_dict['gt_iou_of_rois'].new_zeros(batch_size, num_rois_ema)
+            batch_gt_iou_of_rois[labeled_inds, :num_rois] = targets_dict['gt_iou_of_rois'][labeled_inds]
+            targets_dict['gt_iou_of_rois'] = batch_gt_iou_of_rois
+
+            batch_roi_labels = targets_dict['roi_labels'].new_zeros((batch_size, num_rois_ema), dtype=torch.long)
+            batch_roi_labels[labeled_inds, :num_rois] = targets_dict['roi_labels'][labeled_inds]
+            targets_dict['roi_labels'] = batch_roi_labels
+
+            batch_roi_scores = targets_dict['roi_scores'].new_zeros(batch_size, num_rois_ema)
+            batch_roi_scores[labeled_inds, :num_rois] = targets_dict['roi_scores'][labeled_inds]
+            targets_dict['roi_scores'] = batch_roi_scores
+
+            batch_rcnn_cls_labels = -1 * targets_dict['rcnn_cls_labels'].new_ones(batch_size, num_rois_ema)
+            batch_rcnn_cls_labels[labeled_inds, :num_rois] = targets_dict['rcnn_cls_labels'][labeled_inds]
+            targets_dict['rcnn_cls_labels'] = batch_rcnn_cls_labels
+
+            batch_reg_valid_mask = targets_dict['reg_valid_mask'].new_zeros(batch_size, num_rois_ema)
+            batch_reg_valid_mask[labeled_inds, :num_rois] = targets_dict['reg_valid_mask'][labeled_inds]
+            targets_dict['reg_valid_mask'] = batch_reg_valid_mask
+
+            batch_interval_mask = targets_dict['interval_mask'].new_zeros(batch_size, num_rois_ema)
+            batch_interval_mask[labeled_inds, :num_rois] = targets_dict['interval_mask'][labeled_inds]
+            targets_dict['interval_mask'] = batch_interval_mask
+
+
+        targets_dict['rois'][unlabeled_inds, :num_rois_ema] = batch_dict['rois_ema'][unlabeled_inds]
+        targets_dict['roi_scores'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_scores_ema'][unlabeled_inds]
+        targets_dict['roi_labels'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_labels_ema'][unlabeled_inds]
+        targets_dict['gt_of_rois'][unlabeled_inds, :num_rois_ema] = batch_dict['gt_boxes'][unlabeled_inds]
+        targets_dict['rcnn_cls_labels'][unlabeled_inds, :num_rois_ema] = batch_dict['pred_scores_ema'][unlabeled_inds]
+        targets_dict['reg_valid_mask'][unlabeled_inds, :num_rois_ema] = 1
+        targets_dict['rcnn_cls_labels'][unlabeled_inds, num_rois_ema:] = -1
+        targets_dict['reg_valid_mask'][unlabeled_inds, num_rois_ema:] = 0
+        targets_dict['gt_iou_of_rois'][unlabeled_inds, :num_rois_ema] = 0
+        targets_dict['interval_mask'][unlabeled_inds, :num_rois_ema] = False
+
+        if 'pred_scores_ema_var' in batch_dict.keys():
+            targets_dict['rcnn_cls_labels_var'] = torch.zeros_like(targets_dict['rcnn_cls_labels'])
+            targets_dict['rcnn_cls_labels_var'][unlabeled_inds, :num_rois_ema] = batch_dict['pred_scores_ema_var'][
+                unlabeled_inds]
+        if 'pred_boxes_ema_var' in batch_dict.keys():
+            targets_dict['gt_of_rois_var'] = torch.zeros_like(targets_dict['gt_of_rois'])
+            # Setting all output dims' var to predicted var except for class label
+            targets_dict['gt_of_rois_var'][unlabeled_inds, :num_rois_ema, :-1] = batch_dict['pred_boxes_ema_var'][
+                unlabeled_inds]
+
     def assign_targets(self, batch_dict, override_unlabeled_targets=False):
 
         with torch.no_grad():
             targets_dict = self.proposal_target_layer.forward(batch_dict)
 
         if override_unlabeled_targets:
-            assert batch_dict['rois'].shape[1] == targets_dict['rois'].shape[1], 'Num. of rois should be the same in ' \
-                                                                                 'ROI_PER_IMAGE and NMS_POST_MAXSIZE '
-
-            unlabeled_inds = batch_dict['unlabeled_inds']
-            targets_dict['unlabeled_inds'] = unlabeled_inds
-            targets_dict['rois'][unlabeled_inds] = batch_dict['rois_ema'][unlabeled_inds]
-            targets_dict['roi_scores'][unlabeled_inds] = batch_dict['roi_scores_ema'][unlabeled_inds]
-            targets_dict['roi_labels'][unlabeled_inds] = batch_dict['roi_labels_ema'][unlabeled_inds]
-            targets_dict['gt_of_rois'][unlabeled_inds] = batch_dict['gt_boxes'][unlabeled_inds]
-            targets_dict['rcnn_cls_labels'][unlabeled_inds] = batch_dict['pred_scores_ema'][unlabeled_inds]
-            if 'pred_scores_ema_var' in batch_dict.keys():
-                targets_dict['rcnn_cls_labels_var'] = batch_dict['pred_scores_ema_var'][unlabeled_inds]
-            if 'pred_boxes_ema_var' in batch_dict.keys():
-                targets_dict['gt_of_rois_var'] = batch_dict['pred_boxes_ema_var'][unlabeled_inds]
-
-            # TODO(farzad) can we do better here than assigning ones? Maybe based on our reliability weighting scores?
-            targets_dict['reg_valid_mask'][unlabeled_inds] = torch.ones_like(
-                targets_dict['reg_valid_mask'][unlabeled_inds])
+            self._override_unlabeled_target(targets_dict, batch_dict)
 
         batch_size = batch_dict['batch_size']
 

@@ -176,7 +176,7 @@ MODEL:
                 NMS_TYPE: nms_gpu
                 MULTI_CLASSES_NMS: False
                 NMS_PRE_MAXSIZE: 1024
-                NMS_POST_MAXSIZE: 128
+                NMS_POST_MAXSIZE: 100
                 NMS_THRESH: 0.7
 
         ROI_GRID_POOL:
