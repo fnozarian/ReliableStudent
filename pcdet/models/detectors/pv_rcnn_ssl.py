@@ -8,7 +8,7 @@ from pcdet.ops.iou3d_nms import iou3d_nms_utils
 from pcdet.utils.stat_analyses import *
 from ...utils import common_utils
 from .detector3d_template import Detector3DTemplate
-
+from pcdet.config import cfg
 from.pv_rcnn import PVRCNN
 
 
@@ -16,6 +16,22 @@ def _mean(tensor_list):
     tensor = torch.cat(tensor_list)
     tensor = tensor[~torch.isnan(tensor)]
     mean = tensor.mean() if len(tensor) > 0 else torch.tensor([float('nan')])
+    return mean
+
+
+def _mean_dict(dict_list, class_name):
+    a = []
+    mean = -1
+    for i, dict in enumerate(dict_list):
+        for k, v in dict.items():
+            if k == class_name and v != -1:
+                if torch.is_tensor(v):
+                    a.append(v.cpu())
+                else:
+                    a.append(v)
+    if a:
+        mean = np.array(a).mean()
+
     return mean
 
 class PVRCNN_SSL(Detector3DTemplate):
@@ -151,11 +167,16 @@ class PVRCNN_SSL(Detector3DTemplate):
                 pseudo_fgs = []
                 sem_score_fgs = []
                 sem_score_bgs = []
-                miss_rate = []
+                fps = []
+                tps = []
+                precisions = []
                 for i, ind in enumerate(unlabeled_inds):
                     # statistics
-                    miss_rate.append(get_miss_rate(ori_unlabeled_boxes[i, :], batch_dict['gt_boxes'][ind, ...]
-                                     , threshold=self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']))
+                    precisions.append(pseudo_labels_vs_gt_precision(ori_unlabeled_boxes[i, :],
+                                                                    batch_dict['gt_boxes'][ind, ...], cfg.CLASS_NAMES,
+                                                   iou_thresh=self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']))
+                    fps.append(get_false_positive(ori_unlabeled_boxes[i, :], batch_dict['gt_boxes'][ind, ...], cfg.CLASS_NAMES,
+                                                   iou_thresh=self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']))
                     anchor_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(
                         batch_dict['gt_boxes'][ind, ...][:, 0:7],
                         ori_unlabeled_boxes[i, :, 0:7])
@@ -200,7 +221,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                         pseudo_ious.append(nan)
                         pseudo_accs.append(nan)
                         pseudo_fgs.append(nan)
-                        miss_rate.append(nan)
+                        fps.append({})
+                        precisions.append({})
 
 
             for cur_module in self.pv_rcnn.module_list:
@@ -282,7 +304,9 @@ class PVRCNN_SSL(Detector3DTemplate):
             tb_dict_['pseudo_accs'] = _mean(pseudo_accs)
             tb_dict_['sem_score_fg'] = _mean(sem_score_fgs)
             tb_dict_['sem_score_bg'] = _mean(sem_score_bgs)
-            tb_dict_['miss_rate'] = _mean(miss_rate)
+            for classname in cfg.CLASS_NAMES:
+                tb_dict_['fp' + "_" + classname] = _mean_dict(fps, classname)
+                tb_dict_['precision' + "_" + classname] = _mean_dict(precisions, classname)
 
             tb_dict_['max_box_num'] = max_box_num
             tb_dict_['max_pseudo_box_num'] = max_pseudo_box_num
