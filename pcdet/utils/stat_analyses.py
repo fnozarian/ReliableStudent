@@ -5,7 +5,7 @@ import torch
 def get_false_positive(gt_boxes, predictions, class_names, iou_thresh=0.1):
     fp = {}
     k = gt_boxes.shape[0]
-    while gt_boxes[k-1, 7] == 0:
+    while gt_boxes[k-1, 7] == 0 and 1 < k:
         k = k - 1
     gt_boxes_new = gt_boxes[:k, :]
     for i, class_name in enumerate(class_names):
@@ -34,7 +34,7 @@ def get_false_positive(gt_boxes, predictions, class_names, iou_thresh=0.1):
 def get_false_negatives(gt_boxes, predictions, class_names, iou_thresh=0.1):
     fn = {}
     k = gt_boxes.shape[0]
-    while gt_boxes[k-1, 7] == 0:
+    while gt_boxes[k-1, 7] == 0 and 1 < k:
         k = k - 1
     gt_boxes = gt_boxes[:k, :]
     for i, class_name in enumerate(class_names):
@@ -62,7 +62,7 @@ def get_false_negatives(gt_boxes, predictions, class_names, iou_thresh=0.1):
 def get_true_positive(gt_boxes, predictions, class_names, iou_thresh=0.1):
     tp = {}
     k = gt_boxes.shape[0]
-    while gt_boxes[k-1, 7] == 0:
+    while gt_boxes[k-1, 7] == 0 and 1 < k:
         k = k - 1
     gt_boxes = gt_boxes[:k, :]
     for i, class_name in enumerate(class_names):
