@@ -480,6 +480,9 @@ def eval_class(gt_annos,
         [num_class, num_difficulty, num_minoverlap, N_SAMPLE_PTS])
     recall = np.zeros(
         [num_class, num_difficulty, num_minoverlap, N_SAMPLE_PTS])
+    detailed_stats = np.zeros([num_class, num_difficulty, num_minoverlap, N_SAMPLE_PTS, 5])  # TP, FP, FN, Similarity, thresholds
+    raw_precision = np.zeros_like(precision)
+    raw_recall = np.zeros_like(recall)
     aos = np.zeros([num_class, num_difficulty, num_minoverlap, N_SAMPLE_PTS])
     for m, current_class in enumerate(current_classes):
         for l, difficulty in enumerate(difficultys):
@@ -535,10 +538,19 @@ def eval_class(gt_annos,
                         compute_aos=compute_aos)
                     idx += num_part
                 for i in range(len(thresholds)):
+                    detailed_stats[m, l, k, i, 0] = pr[i, 0]
+                    detailed_stats[m, l, k, i, 1] = pr[i, 1]
+                    detailed_stats[m, l, k, i, 2] = pr[i, 2]
+                    detailed_stats[m, l, k, i, 3] = pr[i, 3]
+                    detailed_stats[m, l, k, i, 4] = thresholds[i]
+
+                for i in range(len(thresholds)):
                     recall[m, l, k, i] = pr[i, 0] / (pr[i, 0] + pr[i, 2])
                     precision[m, l, k, i] = pr[i, 0] / (pr[i, 0] + pr[i, 1])
                     if compute_aos:
                         aos[m, l, k, i] = pr[i, 3] / (pr[i, 0] + pr[i, 1])
+                raw_recall[m, l, k] = recall[m, l, k]
+                raw_precision[m, l, k] = precision[m, l, k]
                 for i in range(len(thresholds)):
                     precision[m, l, k, i] = np.max(
                         precision[m, l, k, i:], axis=-1)
@@ -549,6 +561,9 @@ def eval_class(gt_annos,
         "recall": recall,
         "precision": precision,
         "orientation": aos,
+        "detailed_stats": detailed_stats,
+        "raw_recall": raw_recall,
+        "raw_precision": raw_precision
     }
     return ret_dict
 
@@ -614,7 +629,9 @@ def do_eval(gt_annos,
     mAP_3d = get_mAP(ret["precision"])
     mAP_3d_R40 = get_mAP_R40(ret["precision"])
     if PR_detail_dict is not None:
-        PR_detail_dict['3d'] = ret['precision']
+        stats_3d = {'precision': ret['raw_precision'], 'recall': ret['raw_recall'], 'detailed_stats': ret['detailed_stats']}
+        PR_detail_dict['3d'] = stats_3d
+
     return mAP_bbox, mAP_bev, mAP_3d, mAP_aos, mAP_bbox_R40, mAP_bev_R40, mAP_3d_R40, mAP_aos_R40
 
 
