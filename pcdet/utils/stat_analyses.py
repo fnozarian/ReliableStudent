@@ -102,6 +102,21 @@ def pseudo_labels_vs_gt_precision(gt_boxes, ps_labels, class_names, iou_thresh=0
     return precision
 
 
+def pseudo_labels_vs_gt_recall(gt_boxes, ps_labels, class_names, iou_thresh=0.1):
+    recall = {}
+    fns = get_false_negatives(gt_boxes, ps_labels, class_names, iou_thresh=iou_thresh)
+    tps = get_true_positive(gt_boxes, ps_labels, class_names, iou_thresh=iou_thresh)
+
+    for i, class_name in enumerate(class_names):
+        recall[class_name] = -1.
+        if class_name in tps and class_name in fns:
+            if tps[class_name] != 0 or fns[class_name] != 0:
+                if tps[class_name] != -1 and fns[class_name] != -1:
+                    recall[class_name] = tps[class_name] / (tps[class_name] + fns[class_name])
+
+    return recall
+
+
 if __name__ == '__main__':
     ps_path = 'salam'
 

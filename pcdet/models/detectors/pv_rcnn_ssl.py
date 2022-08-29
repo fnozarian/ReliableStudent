@@ -168,7 +168,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 sem_score_fgs = []
                 sem_score_bgs = []
                 fps = []
-                tps = []
+                recalls = []
                 precisions = []
                 for i, ind in enumerate(unlabeled_inds):
                     # statistics
@@ -176,6 +176,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                                                                     batch_dict['gt_boxes'][ind, ...], cfg.CLASS_NAMES,
                                                    iou_thresh=self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']))
                     fps.append(get_false_positive(ori_unlabeled_boxes[i, :], batch_dict['gt_boxes'][ind, ...], cfg.CLASS_NAMES,
+                                                   iou_thresh=self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']))
+                    recalls.append(pseudo_labels_vs_gt_recall(ori_unlabeled_boxes[i, :], batch_dict['gt_boxes'][ind, ...], cfg.CLASS_NAMES,
                                                    iou_thresh=self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']))
                     anchor_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(
                         batch_dict['gt_boxes'][ind, ...][:, 0:7],
@@ -222,6 +224,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                         pseudo_accs.append(nan)
                         pseudo_fgs.append(nan)
                         fps.append({})
+                        recalls.append({})
                         precisions.append({})
 
 
@@ -305,8 +308,12 @@ class PVRCNN_SSL(Detector3DTemplate):
             tb_dict_['sem_score_fg'] = _mean(sem_score_fgs)
             tb_dict_['sem_score_bg'] = _mean(sem_score_bgs)
             for classname in cfg.CLASS_NAMES:
-                tb_dict_['fp' + "_" + classname] = _mean_dict(fps, classname)
-                tb_dict_['precision' + "_" + classname] = _mean_dict(precisions, classname)
+                tb_dict_['fp' + "_" + classname + "_" + str(self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH'])]\
+                    = _mean_dict(fps, classname)
+                tb_dict_['precision' + "_" + classname + "_" + str(self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH'])]\
+                    = _mean_dict(precisions, classname)
+                tb_dict_['recall' + "_" + classname + "_" + str(self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH'])]\
+                    = _mean_dict(precisions, classname)
 
             tb_dict_['max_box_num'] = max_box_num
             tb_dict_['max_pseudo_box_num'] = max_pseudo_box_num
