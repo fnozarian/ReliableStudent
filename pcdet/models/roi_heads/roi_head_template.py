@@ -213,7 +213,6 @@ class RoIHeadTemplate(nn.Module):
         loss_cfgs = self.model_cfg.LOSS_CONFIG
         code_size = self.box_coder.code_size
 
-        unlabeled_inds = forward_ret_dict['unlabeled_inds']
         reg_valid_mask = forward_ret_dict['reg_valid_mask'].view(-1)
         gt_boxes3d_ct = forward_ret_dict['gt_of_rois'][..., 0:code_size]
         gt_of_rois_src = forward_ret_dict['gt_of_rois_src'][..., 0:code_size].view(-1, code_size)

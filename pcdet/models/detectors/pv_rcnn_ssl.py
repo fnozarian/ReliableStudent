@@ -140,11 +140,11 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict_ema[k[:-4]] = batch_dict[k]
                 else:
                     batch_dict_ema[k] = batch_dict[k]
-            
+
+            # Create new dict for weakly aug.(WA) data for teacher - Eg. flip along x axis
+            batch_dict_ema_wa = {}
             # If ENABLE_RELIABILITY is True, run WA (Humble Teacher) along with original teacher 
             if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
-                # Create new dict for weakly aug.(WA) data for teacher - Eg. flip along x axis
-                batch_dict_ema_wa = {}
                 keys = list(batch_dict.keys())
                 for k in keys:
                     if k + '_ema_wa' in keys:
@@ -190,11 +190,6 @@ class PVRCNN_SSL(Detector3DTemplate):
                     # pseudo-labels used for training rpn head
                     pred_dicts_ens = self.ensemble_post_processing(batch_dict_ema, batch_dict_ema_wa, unlabeled_inds,
                                                                    ensemble_option='mean_pre_nms')
-                    if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
-                        # pseudo-labels used for training roi head
-                        pred_dicts_ens_no_nms = self.ensemble_post_processing(batch_dict_ema, batch_dict_ema_wa,
-                                                                              unlabeled_inds,
-                                                                              ensemble_option='mean_no_nms')
             # Else, run the original teacher only
             else:
                 with torch.no_grad():
@@ -284,24 +279,33 @@ class PVRCNN_SSL(Detector3DTemplate):
                     pseudo_fgs.append(nan)
 
             for cur_module in self.pv_rcnn.module_list:
-                if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
+                if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
                     # Pass teacher's proposal to the student.
                     # To let proposal_layer continues for labeled data we pass rois with _ema postfix
                     batch_dict['rois_ema'] = batch_dict_ema['rois'].detach().clone()
                     batch_dict['roi_scores_ema'] = batch_dict_ema['roi_scores'].detach().clone()
                     batch_dict['roi_labels_ema'] = batch_dict_ema['roi_labels'].detach().clone()
                     batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='rois_ema')
-                    boxes, labels, scores, sem_scores, boxes_var, scores_var = self._unpack_predictions(pred_dicts_ens_no_nms, unlabeled_inds)
+                    if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
+                        # pseudo-labels used for training roi head
+                        pred_dicts = self.ensemble_post_processing(batch_dict_ema, batch_dict_ema_wa, unlabeled_inds,
+                                                                   ensemble_option='mean_no_nms')
+                    else:
+                        pred_dicts, _ = self.pv_rcnn_ema.post_processing(batch_dict_ema, no_recall_dict=True,
+                                                                         override_thresh=0.0, no_nms_for_unlabeled=True)
+                    boxes, labels, scores, sem_scores, boxes_var, scores_var = self._unpack_predictions(pred_dicts, unlabeled_inds)
                     pseudo_boxes = [torch.cat([box, label.unsqueeze(-1)], dim=-1) for box, label in zip(boxes, labels)]
+                    self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
                     batch_dict['pred_scores_ema'] = torch.zeros_like(batch_dict['roi_scores_ema'])
-                    batch_dict['pred_scores_ema_var'] = torch.zeros_like(batch_dict['roi_scores_ema'])
-                    batch_dict['pred_boxes_ema_var'] = torch.zeros_like(batch_dict['rois_ema'])
                     for i, ui in enumerate(unlabeled_inds):
                         batch_dict['pred_scores_ema'][ui] = scores[i]
-                        batch_dict['pred_scores_ema_var'][ui] = scores_var[i]
-                        batch_dict['pred_boxes_ema_var'][ui] = boxes_var[i]
-
-                    self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
+                    # TODO(farzad) ENABLE_RELIABILITY option should not necessarily always have var
+                    if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
+                        batch_dict['pred_scores_ema_var'] = torch.zeros_like(batch_dict['roi_scores_ema'])
+                        batch_dict['pred_boxes_ema_var'] = torch.zeros_like(batch_dict['rois_ema'])
+                        for i, ui in enumerate(unlabeled_inds):
+                            batch_dict['pred_scores_ema_var'][ui] = scores_var[i]
+                            batch_dict['pred_boxes_ema_var'][ui] = boxes_var[i]
 
                 batch_dict = cur_module(batch_dict)
 
@@ -427,8 +431,13 @@ class PVRCNN_SSL(Detector3DTemplate):
             pseudo_box = pred_dicts[ind]['pred_boxes']
             pseudo_label = pred_dicts[ind]['pred_labels']
             pseudo_sem_score = pred_dicts[ind]['pred_sem_scores']
-            pseudo_box_var = pred_dicts[ind]['pred_boxes_var']
-            pseudo_score_var = pred_dicts[ind]['pred_scores_var']
+            # TODO(farzad) REFACTOR LATER!
+            pseudo_box_var = -1 * torch.ones_like(pseudo_box)
+            if "pred_boxes_var" in pred_dicts[ind].keys():
+                pseudo_box_var = pred_dicts[ind]['pred_boxes_var']
+            pseudo_score_var = -1 * torch.ones_like(pseudo_score)
+            if "pred_scores_var" in pred_dicts[ind].keys():
+                pseudo_score_var = pred_dicts[ind]['pred_scores_var']
             if len(pseudo_label) == 0:
                 pseudo_boxes.append(pseudo_label.new_zeros((0, 7)).float())
                 pseudo_boxes_var.append(pseudo_label.new_zeros((0, 7)).float())
