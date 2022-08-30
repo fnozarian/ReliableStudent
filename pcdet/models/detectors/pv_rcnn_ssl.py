@@ -321,15 +321,21 @@ class PVRCNN_SSL(Detector3DTemplate):
             ret_dict = {
                 'loss': loss
             }
-            return ret_dict, tb_dict_, disp_dict
+            return ret_dict, tb_dict_, disp_dict, {}
 
         else:
+            batch_dict_ema = copy.deepcopy(batch_dict)
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
 
             pred_dicts, recall_dicts = self.pv_rcnn.post_processing(batch_dict)
 
-            return pred_dicts, recall_dicts, {}
+            for cur_module in self.pv_rcnn_ema.module_list:
+                batch_dict_ema = cur_module(batch_dict_ema)
+
+            pseudo_labels, _ = self.pv_rcnn_ema.post_processing(batch_dict_ema)
+
+            return pred_dicts, recall_dicts, {}, pseudo_labels
 
     def get_supervised_training_loss(self):
         disp_dict = {}
@@ -338,7 +344,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         loss_rcnn, tb_dict = self.roi_head.get_loss(tb_dict)
 
         loss = loss_rpn + loss_point + loss_rcnn
-        return loss, tb_dict, disp_dict
+        return loss, tb_dict, disp_dict, {}
 
     def update_global_step(self):
         self.global_step += 1
