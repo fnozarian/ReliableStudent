@@ -30,7 +30,7 @@ def _stats(pred_infos, gt_infos):
     # NUM_STATS is 5, and {0:'tp', 1:'fp', 2:'fn', 3:'similarity', 4:'precision thresholds'}
     # for example [0, 1, 0, :, 0] means number of TPs of Car class with normal difficulty and overlap@0.7 for all 41 sample points
 
-    # Example of extracting gts and dets of an example based on specific class and difficulty combination
+    # Example of extracting overlap between gts and dets of an example based on specific class and difficulty combination
     example_idx = 1  # second example in our dataset
     class_idx = 0  # class Car
     difficulty_idx = 1  # medium difficulty
