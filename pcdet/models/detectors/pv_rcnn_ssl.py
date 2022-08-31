@@ -439,8 +439,8 @@ class PVRCNN_SSL(Detector3DTemplate):
             if "pred_scores_var" in pred_dicts[ind].keys():
                 pseudo_score_var = pred_dicts[ind]['pred_scores_var']
             if len(pseudo_label) == 0:
-                pseudo_boxes.append(pseudo_label.new_zeros((0, 7)).float())
-                pseudo_boxes_var.append(pseudo_label.new_zeros((0, 7)).float())
+                pseudo_boxes.append(pseudo_label.new_zeros((1, 7)).float())
+                pseudo_boxes_var.append(pseudo_label.new_zeros((1, 7)).float())
                 pseudo_sem_scores.append(pseudo_label.new_zeros((1,)).float())
                 pseudo_scores.append(pseudo_label.new_zeros((1,)).float())
                 pseudo_scores_var.append(pseudo_label.new_zeros((1,)).float())

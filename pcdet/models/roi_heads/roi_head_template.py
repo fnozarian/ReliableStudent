@@ -160,7 +160,6 @@ class RoIHeadTemplate(nn.Module):
         targets_dict['rcnn_cls_labels'][unlabeled_inds, num_rois_ema:] = -1
         targets_dict['reg_valid_mask'][unlabeled_inds, num_rois_ema:] = 0
         targets_dict['gt_iou_of_rois'][unlabeled_inds, :num_rois_ema] = 0
-        targets_dict['interval_mask'][unlabeled_inds, :num_rois_ema] = False
 
         if 'pred_scores_ema_var' in batch_dict.keys():
             targets_dict['rcnn_cls_labels_var'] = torch.zeros_like(targets_dict['rcnn_cls_labels'])
