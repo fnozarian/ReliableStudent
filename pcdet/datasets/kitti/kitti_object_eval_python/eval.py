@@ -483,12 +483,21 @@ def eval_class(gt_annos,
     detailed_stats = np.zeros([num_class, num_difficulty, num_minoverlap, N_SAMPLE_PTS, 5])  # TP, FP, FN, Similarity, thresholds
     raw_precision = np.zeros_like(precision)
     raw_recall = np.zeros_like(recall)
+    max_num_gts = max([len(example['bbox']) for example in gt_annos])
+    max_num_dets = max([len(det['bbox']) for det in dt_annos])
+    class_difficulty_ignored_dets_mask = -1 * np.ones([num_class, num_difficulty, num_examples, max_num_dets])
+    class_difficulty_ignored_gts_mask = -1 * np.ones([num_class, num_difficulty, num_examples, max_num_gts])
     aos = np.zeros([num_class, num_difficulty, num_minoverlap, N_SAMPLE_PTS])
     for m, current_class in enumerate(current_classes):
         for l, difficulty in enumerate(difficultys):
             rets = _prepare_data(gt_annos, dt_annos, current_class, difficulty)
             (gt_datas_list, dt_datas_list, ignored_gts, ignored_dets,
              dontcares, total_dc_num, total_num_valid_gt) = rets
+            for i in range(num_examples):
+                ignored_dets_i = ignored_dets[i]
+                ignored_gts_i = ignored_gts[i]
+                class_difficulty_ignored_dets_mask[current_class, difficulty, i, :len(ignored_dets_i)] = ignored_dets_i
+                class_difficulty_ignored_gts_mask[current_class, difficulty, i, :len(ignored_gts_i)] = ignored_gts_i
             for k, min_overlap in enumerate(min_overlaps[:, metric, m]):
                 thresholdss = []
                 for i in range(len(gt_annos)):
@@ -563,7 +572,10 @@ def eval_class(gt_annos,
         "orientation": aos,
         "detailed_stats": detailed_stats,
         "raw_recall": raw_recall,
-        "raw_precision": raw_precision
+        "raw_precision": raw_precision,
+        "overlaps": overlaps,
+        "class_difficulty_ignored_gts_mask": class_difficulty_ignored_gts_mask,
+        "class_difficulty_ignored_dets_mask": class_difficulty_ignored_dets_mask
     }
     return ret_dict
 
@@ -629,7 +641,10 @@ def do_eval(gt_annos,
     mAP_3d = get_mAP(ret["precision"])
     mAP_3d_R40 = get_mAP_R40(ret["precision"])
     if PR_detail_dict is not None:
-        stats_3d = {'precision': ret['raw_precision'], 'recall': ret['raw_recall'], 'detailed_stats': ret['detailed_stats']}
+        stats_3d = {'precision': ret['raw_precision'], 'recall': ret['raw_recall'],
+                    'detailed_stats': ret['detailed_stats'], 'overlaps': ret['overlaps'],
+                    'class_difficulty_ignored_gts_mask': ret['class_difficulty_ignored_gts_mask'],
+                    'class_difficulty_ignored_dets_mask': ret['class_difficulty_ignored_dets_mask']}
         PR_detail_dict['3d'] = stats_3d
 
     return mAP_bbox, mAP_bev, mAP_3d, mAP_aos, mAP_bbox_R40, mAP_bev_R40, mAP_3d_R40, mAP_aos_R40

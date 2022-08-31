@@ -30,6 +30,21 @@ def _stats(pred_infos, gt_infos):
     # NUM_STATS is 5, and {0:'tp', 1:'fp', 2:'fn', 3:'similarity', 4:'precision thresholds'}
     # for example [0, 1, 0, :, 0] means number of TPs of Car class with normal difficulty and overlap@0.7 for all 41 sample points
 
+    # Example of extracting gts and dets of an example based on specific class and difficulty combination
+    example_idx = 1  # second example in our dataset
+    class_idx = 0  # class Car
+    difficulty_idx = 1  # medium difficulty
+    import numpy as np
+    overlaps = PR_detail_dict['3d']['overlaps']
+    class_difficulty_ignored_gts_mask = PR_detail_dict['3d']['class_difficulty_ignored_gts_mask']
+    class_difficulty_ignored_dets_mask = PR_detail_dict['3d']['class_difficulty_ignored_dets_mask']
+    valid_gts_inds = np.where(class_difficulty_ignored_gts_mask[class_idx, difficulty_idx, example_idx] == 0)[0]
+    valid_dets_inds = np.where(class_difficulty_ignored_dets_mask[class_idx, difficulty_idx, example_idx] == 0)[0]
+    valid_inds = np.ix_(valid_dets_inds, valid_gts_inds)
+    cls_diff_overlaps = overlaps[example_idx][valid_inds]
+    print("cls_diff_overlaps: ", cls_diff_overlaps)
+    print("cls_diff_overlaps.shape: ", cls_diff_overlaps.shape)
+
     # Reproducing fig. 3 of soft-teacher as an example
     from matplotlib import pyplot as plt
     fig, ax1 = plt.subplots()
