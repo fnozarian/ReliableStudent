@@ -465,7 +465,15 @@ class PVRCNN_SSL(Detector3DTemplate):
         pseudo_boxes_var = []
         for pseudo_box, pseudo_label, pseudo_score, pseudo_sem_score, pseudo_box_var, pseudo_score_var in zip(
                 *self._unpack_predictions(pred_dicts, unlabeled_inds)):
-
+            
+            if pseudo_label[0] == 0:
+                pseudo_boxes.append(torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1))
+                pseudo_sem_scores.append(pseudo_sem_score)
+                pseudo_scores.append(pseudo_score)
+                pseudo_scores_var.append(pseudo_score_var)
+                pseudo_boxes_var.append(pseudo_box_var)
+                continue
+        
             conf_thresh = torch.tensor(self.thresh, device=pseudo_label.device).unsqueeze(
                 0).repeat(len(pseudo_label), 1).gather(dim=1, index=(pseudo_label - 1).unsqueeze(-1))
 
@@ -509,8 +517,13 @@ class PVRCNN_SSL(Detector3DTemplate):
 
     def _fill_with_pseudo_labels(self, batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds):
         max_box_num = batch_dict['gt_boxes'].shape[1]
-
-        max_pseudo_box_num = max([len(ps_box) for ps_box in pseudo_boxes])
+        
+        # Ignore the count of pseudo boxes if filled with default values(zeros) when no preds are made
+        pseudo_boxes_num = []
+        for ps_box in pseudo_boxes:
+            num_per_batch = len(ps_box) if torch.count_nonzero(ps_box) else 0
+            pseudo_boxes_num.append(num_per_batch) 
+        max_pseudo_box_num = max(pseudo_boxes_num)
 
         if max_box_num >= max_pseudo_box_num:
             for i, pseudo_box in enumerate(pseudo_boxes):
