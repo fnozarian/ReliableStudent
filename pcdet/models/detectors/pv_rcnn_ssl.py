@@ -5,18 +5,12 @@ import torch
 import torch.nn.functional as F
 from pcdet.datasets.augmentor.augmentor_utils import *
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
+from pcdet.utils.cal_quality_utils import MetricRegistry
 
 from ...utils import common_utils
 from .detector3d_template import Detector3DTemplate
-
+from collections import defaultdict
 from.pv_rcnn import PVRCNN
-
-
-def _mean(tensor_list):
-    tensor = torch.cat(tensor_list)
-    tensor = tensor[~torch.isnan(tensor)]
-    mean = tensor.mean() if len(tensor) > 0 else torch.tensor([float('nan')])
-    return mean
 
 
 def _to_dict_of_tensors(list_of_dicts, agg_mode='stack'):
@@ -125,6 +119,8 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.no_nms = model_cfg.NO_NMS
         self.supervise_mode = model_cfg.SUPERVISE_MODE
 
+        self.metric_registry = MetricRegistry(self.dataset.class_names)
+
     def forward(self, batch_dict):
         if self.training:
             labeled_mask = batch_dict['labeled_mask'].view(-1)
@@ -205,6 +201,12 @@ class PVRCNN_SSL(Detector3DTemplate):
             pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
                 self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
 
+            # TODO(farzad) Do not use examples with zero pseudo_boxes after filtering! Otherwise roi layer continues
+            #  sampling ROI_PER_IMAGE backgrounds (w/o FGs) which might be confusing because some of the pseudo-labels
+            #  with high objectness score and low sem score might have been filtered.
+            #  Think about filtering based on objectness and sem score separately.
+            #  I.e., what happens if we have PLs with high quality objectness but low quality sem score (or vice versa).
+
             ori_unlabeled_boxes = batch_dict['gt_boxes'][unlabeled_inds, ...]
 
             self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
@@ -226,57 +228,9 @@ class PVRCNN_SSL(Detector3DTemplate):
                 batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['scale'][unlabeled_inds, ...]
             )
 
-            pseudo_ious = []
-            pseudo_accs = []
-            pseudo_fgs = []
-            sem_score_fgs = []
-            sem_score_bgs = []
-            for i, ind in enumerate(unlabeled_inds):
-                # statistics
-                anchor_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(
-                    batch_dict['gt_boxes'][ind, ...][:, 0:7],
-                    ori_unlabeled_boxes[i, :, 0:7])
-                cls_pseudo = batch_dict['gt_boxes'][ind, ...][:, 7]
-                nonzero_inds = torch.nonzero(cls_pseudo).squeeze(1).long()
-                cls_pseudo = cls_pseudo[nonzero_inds]
-                if len(nonzero_inds) > 0:
-                    iou_max, asgn = anchor_by_gt_overlap[nonzero_inds, :].max(dim=1)
-                    pseudo_ious.append(iou_max.mean().unsqueeze(dim=0))
-                    acc = (ori_unlabeled_boxes[i][:, 7].gather(dim=0, index=asgn) == cls_pseudo).float().mean()
-                    pseudo_accs.append(acc.unsqueeze(0))
-                    fg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
-                    bg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']  # bg_thresh includes both easy and hard bgs
-                    fg = (iou_max > fg_thresh).float().sum(dim=0, keepdim=True) / len(nonzero_inds)
-
-                    sem_score_fg = (pseudo_sem_scores[i][nonzero_inds] * (iou_max > fg_thresh).float()).sum(dim=0, keepdim=True) \
-                                    / torch.clamp((iou_max > fg_thresh).float().sum(dim=0, keepdim=True), min=1.0)
-                    sem_score_bg = (pseudo_sem_scores[i][nonzero_inds] * (iou_max < bg_thresh).float()).sum(dim=0, keepdim=True) \
-                                    / torch.clamp((iou_max < bg_thresh).float().sum(dim=0, keepdim=True), min=1.0)
-                    pseudo_fgs.append(fg)
-                    sem_score_fgs.append(sem_score_fg)
-                    sem_score_bgs.append(sem_score_bg)
-
-                    # only for 100% label
-                    if self.supervise_mode >= 1:
-                        filter = iou_max > 0.3
-                        asgn = asgn[filter]
-                        batch_dict['gt_boxes'][ind, ...][:] = torch.zeros_like(batch_dict['gt_boxes'][ind, ...][:])
-                        batch_dict['gt_boxes'][ind, ...][:len(asgn)] = ori_unlabeled_boxes[i, :].gather(dim=0, index=asgn.unsqueeze(-1).repeat(1, 8))
-
-                        if self.supervise_mode == 2:
-                            batch_dict['gt_boxes'][ind, ...][:len(asgn), 0:3] += 0.1 * torch.randn((len(asgn), 3), device=iou_max.device) * \
-                                                                                    batch_dict['gt_boxes'][ind, ...][
-                                                                                    :len(asgn), 3:6]
-                            batch_dict['gt_boxes'][ind, ...][:len(asgn), 3:6] += 0.1 * torch.randn((len(asgn), 3), device=iou_max.device) * \
-                                                                                    batch_dict['gt_boxes'][ind, ...][
-                                                                                    :len(asgn), 3:6]
-                else:
-                    nan = torch.tensor([float('nan')], device=unlabeled_inds.device)
-                    sem_score_fgs.append(nan)
-                    sem_score_bgs.append(nan)
-                    pseudo_ious.append(nan)
-                    pseudo_accs.append(nan)
-                    pseudo_fgs.append(nan)
+            statistics = self.calc_statistics(batch_dict['gt_boxes'][unlabeled_inds], ori_unlabeled_boxes, True,
+                                              tag='after_filtering',
+                                              pseudo_sem_scores=pseudo_sem_scores)
 
             for cur_module in self.pv_rcnn.module_list:
                 if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
@@ -345,13 +299,10 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     tb_dict_[key] = tb_dict[key]
 
-            tb_dict_['pseudo_ious'] = _mean(pseudo_ious)
-            tb_dict_['pseudo_accs'] = _mean(pseudo_accs)
-            tb_dict_['sem_score_fg'] = _mean(sem_score_fgs)
-            tb_dict_['sem_score_bg'] = _mean(sem_score_bgs)
+            tb_dict_.update(statistics)
 
-            tb_dict_['max_box_num'] = max(len(box) for box in ori_unlabeled_boxes)
-            tb_dict_['max_pseudo_box_num'] = max(len(box) for box in batch_dict['gt_boxes'])
+            tb_dict_['max_box_num'] = max([(box.sum(dim=-1) > 0).sum().item() for box in ori_unlabeled_boxes])
+            tb_dict_['max_pseudo_box_num'] = max([(box.sum(dim=-1) > 0).sum().item() for box in batch_dict['gt_boxes'][unlabeled_inds]])
 
             ret_dict = {
                 'loss': loss
@@ -365,6 +316,84 @@ class PVRCNN_SSL(Detector3DTemplate):
             pred_dicts, recall_dicts = self.pv_rcnn.post_processing(batch_dict)
 
             return pred_dicts, recall_dicts, {}
+
+    # TODO(farzad) Warning: this method has two types of stats: one maintaining their stats over batches, e.g., TP, FP
+    #  and two reset state after each batch. Use update_metrics flag if you want call the method twice in different
+    #  places during a batch.
+    def calc_statistics(self, pred_boxes, gt_boxes, update_metrics=True, tag=None, **kwargs):
+        assert len(pred_boxes) == len(gt_boxes)
+
+        statistics = defaultdict(list)
+        for i in range(len(pred_boxes)):
+            valid_preds_mask = pred_boxes[i].sum(dim=-1) > 0
+            valid_gts_mask = gt_boxes[i].sum(dim=-1) > 0
+            num_gts = valid_gts_mask.sum()
+            num_preds = valid_preds_mask.sum()
+            if num_gts > 0 and num_preds > 0:
+                gt_boxes = gt_boxes[i, valid_gts_mask]
+                pred_boxes = pred_boxes[i, valid_preds_mask]
+                pred_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(pred_boxes[:, 0:7], gt_boxes[:, 0:7])
+                preds_iou_max, assigned_gt_inds = pred_by_gt_overlap.max(dim=1)
+                statistics['pseudo_ious'].append(preds_iou_max.mean().item())
+
+                acc = (pred_boxes[:, -1] == gt_boxes[assigned_gt_inds, -1]).float().mean()
+                statistics['pseudo_accs'].append(acc.item())
+
+                fg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
+                bg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
+                fg = (preds_iou_max > fg_thresh).float().mean().item()
+                statistics['pseudo_fgs'].append(fg)
+
+                if kwargs['pseudo_sem_scores']:
+                    pseudo_sem_scores = kwargs['pseudo_sem_scores']
+                    sem_score_fg = (pseudo_sem_scores[i] * (preds_iou_max > fg_thresh).float()).sum() \
+                                   / torch.clamp((preds_iou_max > fg_thresh).sum(), min=1.0)
+                    sem_score_bg = (pseudo_sem_scores[i] * (preds_iou_max < bg_thresh).float()).sum() \
+                                   / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
+
+                    statistics['sem_score_fgs'].append(sem_score_fg.item())
+                    statistics['sem_score_bgs'].append(sem_score_bg.item())
+
+                if update_metrics:
+                    self.metric_registry.get(tag).update_metrics_of_all_classes(pred_boxes, gt_boxes, preds_iou_max,
+                                                                                fg_thresh, assigned_gt_inds,
+                                                                                pred_boxes[:, -1])
+            else:
+                nan = float('nan')
+                statistics['sem_score_fgs'].append(nan)
+                statistics['sem_score_bgs'].append(nan)
+                statistics['pseudo_ious'].append(nan)
+                statistics['pseudo_accs'].append(nan)
+                statistics['pseudo_fgs'].append(nan)
+
+            if update_metrics:
+                if num_gts > 0 and num_preds == 0:
+                    # Missed GTs. Probably filtered by sem/obj filters --> see the falsely rejected metric
+                    for gt_cls in gt_boxes[i, valid_gts_mask, -1].int():
+                        cls_name = self.dataset.class_names[gt_cls.item()-1]
+                        self.metric_registry.get(tag).get_metrics_of(cls_name).metrics['fn'].update(1)
+                if num_preds > 0 and num_gts == 0:
+                    # False positives. Probably passed sem/obj filters --> see the falsely accepted metric
+                    for pred_cls in pred_boxes[i, valid_preds_mask, -1]:
+                        cls_name = self.dataset.class_names[pred_cls]
+                        self.metric_registry.get(tag).get_metrics_of(cls_name).metrics['fp'].update(1)
+
+        for cls in self.metric_registry.get(tag).class_names:
+            for mkey, mval in self.metric_registry.get(tag).get_metrics_of(cls).metrics.items():
+                statistics[mkey + "/" + cls + "/" + tag] = mval.avg
+
+
+        for key, val in statistics.items():
+            statistics[key] = np.nanmean(val)
+        tag = "/" + tag if tag else ''
+
+        ret_stats = {}
+        for key, val in statistics.items():
+            ret_stats[key + tag] = val
+
+        # TODO(farzad) any metrics based on pseudo scores?
+
+        return ret_stats
 
     def ensemble_post_processing(self, batch_dict_a, batch_dict_b, unlabeled_inds, ensemble_option=None):
         # TODO(farzad) what about roi_labels and roi_scores in following options?
@@ -481,6 +510,17 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             valid_inds = valid_inds * (pseudo_sem_score > self.sem_thresh[0])
 
+            # TODO(farzad) can this be similarly determined by tag-based stats before and after filtering?
+            # rej_labels = pseudo_label[~valid_inds]
+            # rej_labels_per_class = torch.bincount(rej_labels, minlength=len(self.thresh) + 1)
+            # for class_ind, class_key in enumerate(self.metric_table.metric_record):
+            #     if class_key == 'class_agnostic':
+            #         self.metric_table.metric_record[class_key].metrics['rej_pseudo_lab'].update(
+            #             rej_labels_per_class[1:].sum().item())
+            #     else:
+            #         self.metric_table.metric_record[class_key].metrics['rej_pseudo_lab'].update(
+            #             rej_labels_per_class[class_ind].item())
+
             pseudo_sem_score = pseudo_sem_score[valid_inds]
             pseudo_box = pseudo_box[valid_inds]
             pseudo_label = pseudo_label[valid_inds]
@@ -519,11 +559,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         max_box_num = batch_dict['gt_boxes'].shape[1]
         
         # Ignore the count of pseudo boxes if filled with default values(zeros) when no preds are made
-        pseudo_boxes_num = []
-        for ps_box in pseudo_boxes:
-            num_per_batch = len(ps_box) if torch.count_nonzero(ps_box) else 0
-            pseudo_boxes_num.append(num_per_batch) 
-        max_pseudo_box_num = max(pseudo_boxes_num)
+        max_pseudo_box_num = max([(ps_box.sum(dim=-1) > 0).sum().item() for ps_box in pseudo_boxes])
 
         if max_box_num >= max_pseudo_box_num:
             for i, pseudo_box in enumerate(pseudo_boxes):
