@@ -326,7 +326,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         statistics = defaultdict(list)
         for i in range(len(pred_boxes)):
             valid_preds_mask = torch.all(pred_boxes[i] != 0, dim=-1)
-            valid_gts_mask = torch.all(pred_boxes[i] != 0, dim=-1)
+            valid_gts_mask = torch.all(gt_boxes[i] != 0, dim=-1)
             num_gts = valid_gts_mask.sum()
             num_preds = valid_preds_mask.sum()
             if num_gts > 0 and num_preds > 0:
@@ -374,7 +374,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                         self.metric_registry.get(tag).get_metrics_of(cls_name).metrics['fn'].update(1)
                 if num_preds > 0 and num_gts == 0:
                     # False positives. Probably passed sem/obj filters --> see the falsely accepted metric
-                    for pred_cls in pred_boxes[i, valid_preds_mask, -1]:
+                    for pred_cls in pred_boxes[i, valid_preds_mask, -1].int():
                         cls_name = self.dataset.class_names[pred_cls]
                         self.metric_registry.get(tag).get_metrics_of(cls_name).metrics['fp'].update(1)
 
