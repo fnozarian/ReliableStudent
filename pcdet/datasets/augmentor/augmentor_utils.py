@@ -96,7 +96,7 @@ def random_flip_along_x_bbox(gt_boxes, enables):
     """
     for i in range(len(enables)):
         if enables[i]:
-            valid_mask = torch.all(gt_boxes[i] != 0, dim=-1)
+            valid_mask = torch.logical_not(torch.all(gt_boxes[i] == 0, dim=-1))
             gt_boxes[i, valid_mask, 1] = -gt_boxes[i, valid_mask, 1]
             gt_boxes[i, valid_mask, 6] = -gt_boxes[i, valid_mask, 6]
 
@@ -115,7 +115,7 @@ def random_flip_along_y_bbox(gt_boxes, enables):
     """
     for i in range(len(enables)):
         if enables[i]:
-            valid_mask = torch.all(gt_boxes[i] != 0, dim=-1)
+            valid_mask = torch.logical_not(torch.all(gt_boxes[i] == 0, dim=-1))
             gt_boxes[i, valid_mask, 0] = -gt_boxes[i, valid_mask, 0]
             gt_boxes[i, valid_mask, 6] = -(gt_boxes[i, valid_mask, 6] + np.pi)
 
@@ -135,7 +135,7 @@ def global_rotation_bbox(gt_boxes, rotations):
     """
     for i in range(len(rotations)):
         rotation = rotations[i:i+1]
-        valid_mask = torch.all(gt_boxes[i] != 0, dim=-1)
+        valid_mask = torch.logical_not(torch.all(gt_boxes[i] == 0, dim=-1))
         gt_boxes[i, valid_mask, 0:3] = common_utils.rotate_points_along_z(gt_boxes[i:i+1, valid_mask, 0:3], rotation)[0]
         gt_boxes[i, valid_mask, 6] += rotation
         # if gt_boxes.shape[2] > 7:
@@ -156,7 +156,7 @@ def global_scaling_bbox(gt_boxes, scales):
     Returns:
     """
     for i in range(len(scales)):
-        valid_mask = torch.all(gt_boxes[i] != 0, dim=-1)
+        valid_mask = torch.logical_not(torch.all(gt_boxes[i] == 0, dim=-1))
         gt_boxes[i, valid_mask, :6] *= scales[i]
     return gt_boxes
 

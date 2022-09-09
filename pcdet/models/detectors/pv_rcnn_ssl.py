@@ -301,8 +301,8 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             tb_dict_.update(statistics)
 
-            tb_dict_['max_box_num'] = max([torch.all(box != 0, dim=-1).sum().item() for box in ori_unlabeled_boxes])
-            tb_dict_['max_pseudo_box_num'] = max([torch.all(box != 0, dim=-1).sum().item() for box in batch_dict['gt_boxes'][unlabeled_inds]])
+            tb_dict_['max_box_num'] = max([torch.logical_not(torch.all(box == 0, dim=-1)).sum().item() for box in ori_unlabeled_boxes])
+            tb_dict_['max_pseudo_box_num'] = max([torch.logical_not(torch.all(box == 0, dim=-1)).sum().item() for box in batch_dict['gt_boxes'][unlabeled_inds]])
 
             ret_dict = {
                 'loss': loss
@@ -325,8 +325,8 @@ class PVRCNN_SSL(Detector3DTemplate):
 
         statistics = defaultdict(list)
         for i in range(len(pred_boxes)):
-            valid_preds_mask = torch.all(pred_boxes[i] != 0, dim=-1)
-            valid_gts_mask = torch.all(gt_boxes[i] != 0, dim=-1)
+            valid_preds_mask = torch.logical_not(torch.all(pred_boxes[i] == 0, dim=-1))
+            valid_gts_mask = torch.logical_not(torch.all(gt_boxes[i] == 0, dim=-1))
             num_gts = valid_gts_mask.sum()
             num_preds = valid_preds_mask.sum()
             if num_gts > 0 and num_preds > 0:
@@ -571,7 +571,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         max_box_num = batch_dict['gt_boxes'].shape[1]
         
         # Ignore the count of pseudo boxes if filled with default values(zeros) when no preds are made
-        max_pseudo_box_num = max([(ps_box.sum(dim=-1) > 0).sum().item() for ps_box in pseudo_boxes])
+        max_pseudo_box_num = max([torch.logical_not(torch.all(ps_box == 0, dim=-1)).sum().item() for ps_box in pseudo_boxes])
 
         if max_box_num >= max_pseudo_box_num:
             for i, pseudo_box in enumerate(pseudo_boxes):
