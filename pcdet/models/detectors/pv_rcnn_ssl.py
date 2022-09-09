@@ -375,7 +375,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 if num_preds > 0 and num_gts == 0:
                     # False positives. Probably passed sem/obj filters --> see the falsely accepted metric
                     for pred_cls in pred_boxes[i, valid_preds_mask, -1].int():
-                        cls_name = self.dataset.class_names[pred_cls]
+                        cls_name = self.dataset.class_names[pred_cls.item()-1]
                         self.metric_registry.get(tag).get_metrics_of(cls_name).metrics['fp'].update(1)
 
         # TODO(farzad) All Metric, ClassWiseMetric and MetricRegistry should be refactored.
