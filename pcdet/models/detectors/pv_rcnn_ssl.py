@@ -389,7 +389,8 @@ class PVRCNN_SSL(Detector3DTemplate):
 
         ret_stats = {}
         for key, val in statistics.items():
-            ret_stats[key + tag] = val
+            metrics_key = (key + tag) if tag not in key else key
+            ret_stats[metrics_key] = val 
 
         # TODO(farzad) any metrics based on pseudo scores?
 
