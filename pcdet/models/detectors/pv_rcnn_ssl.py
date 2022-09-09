@@ -301,8 +301,8 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             tb_dict_.update(statistics)
 
-            tb_dict_['max_box_num'] = max([(box.sum(dim=-1) > 0).sum().item() for box in ori_unlabeled_boxes])
-            tb_dict_['max_pseudo_box_num'] = max([(box.sum(dim=-1) > 0).sum().item() for box in batch_dict['gt_boxes'][unlabeled_inds]])
+            tb_dict_['max_box_num'] = max([torch.all(box != 0, dim=-1).sum().item() for box in ori_unlabeled_boxes])
+            tb_dict_['max_pseudo_box_num'] = max([torch.all(box != 0, dim=-1).sum().item() for box in batch_dict['gt_boxes'][unlabeled_inds]])
 
             ret_dict = {
                 'loss': loss
@@ -325,18 +325,18 @@ class PVRCNN_SSL(Detector3DTemplate):
 
         statistics = defaultdict(list)
         for i in range(len(pred_boxes)):
-            valid_preds_mask = pred_boxes[i].sum(dim=-1) > 0
-            valid_gts_mask = gt_boxes[i].sum(dim=-1) > 0
+            valid_preds_mask = torch.all(pred_boxes[i] != 0, dim=-1)
+            valid_gts_mask = torch.all(pred_boxes[i] != 0, dim=-1)
             num_gts = valid_gts_mask.sum()
             num_preds = valid_preds_mask.sum()
             if num_gts > 0 and num_preds > 0:
-                gt_boxes = gt_boxes[i, valid_gts_mask]
-                pred_boxes = pred_boxes[i, valid_preds_mask]
-                pred_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(pred_boxes[:, 0:7], gt_boxes[:, 0:7])
+                valid_gt_boxes = gt_boxes[i, valid_gts_mask]
+                valid_pred_boxes = pred_boxes[i, valid_preds_mask]
+                pred_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
                 preds_iou_max, assigned_gt_inds = pred_by_gt_overlap.max(dim=1)
                 statistics['pseudo_ious'].append(preds_iou_max.mean().item())
 
-                acc = (pred_boxes[:, -1] == gt_boxes[assigned_gt_inds, -1]).float().mean()
+                acc = (valid_pred_boxes[:, -1] == valid_gt_boxes[assigned_gt_inds, -1]).float().mean()
                 statistics['pseudo_accs'].append(acc.item())
 
                 fg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
@@ -355,9 +355,9 @@ class PVRCNN_SSL(Detector3DTemplate):
                     statistics['sem_score_bgs'].append(sem_score_bg.item())
 
                 if update_metrics:
-                    self.metric_registry.get(tag).update_metrics_of_all_classes(pred_boxes, gt_boxes, preds_iou_max,
+                    self.metric_registry.get(tag).update_metrics_of_all_classes(valid_pred_boxes, valid_gt_boxes, preds_iou_max,
                                                                                 fg_thresh, assigned_gt_inds,
-                                                                                pred_boxes[:, -1])
+                                                                                valid_pred_boxes[:, -1])
             else:
                 nan = float('nan')
                 statistics['sem_score_fgs'].append(nan)
@@ -378,19 +378,30 @@ class PVRCNN_SSL(Detector3DTemplate):
                         cls_name = self.dataset.class_names[pred_cls]
                         self.metric_registry.get(tag).get_metrics_of(cls_name).metrics['fp'].update(1)
 
-        for cls in self.metric_registry.get(tag).class_names:
-            for mkey, mval in self.metric_registry.get(tag).get_metrics_of(cls).metrics.items():
-                statistics[mkey + "/" + cls + "/" + tag] = mval.avg
+        # TODO(farzad) All Metric, ClassWiseMetric and MetricRegistry should be refactored.
+        num_cls = len(self.metric_registry.get(tag).class_names)
+        metrics_name = ['tp', 'fp', 'fn', 'assignment_err', 'cls_err', 'precision', 'recall', 'rej_pseudo_lab']
+        num_metrics = len(metrics_name)
+        cls_metrics = np.zeros((num_cls, num_metrics))
+        for c, cname in enumerate(self.metric_registry.get(tag).class_names):
+            for m, mname in enumerate(metrics_name):
+                mval = self.metric_registry.get(tag).get_metrics_of(cname).metrics[mname]
+                cls_metrics[c, m] = mval.avg
 
+        for m, mname in enumerate(metrics_name):
+            cls_comb_stats = {}
+            for c, cname in enumerate(self.metric_registry.get(tag).class_names):
+                cls_comb_stats[cname] = cls_metrics[c, m]
+            statistics[mname] = cls_comb_stats
 
         for key, val in statistics.items():
-            statistics[key] = np.nanmean(val)
-        tag = "/" + tag if tag else ''
+            if isinstance(val, list):
+                statistics[key] = np.nanmean(val)
+        tag = tag + "/" if tag else ''
 
         ret_stats = {}
         for key, val in statistics.items():
-            metrics_key = (key + tag) if tag not in key else key
-            ret_stats[metrics_key] = val 
+            ret_stats[tag + key] = val
 
         # TODO(farzad) any metrics based on pseudo scores?
 
