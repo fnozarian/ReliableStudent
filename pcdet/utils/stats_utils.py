@@ -8,10 +8,341 @@ import argparse
 import pickle
 
 from pcdet.datasets.kitti.kitti_object_eval_python import eval as kitti_eval
+from torchmetrics import Metric
+import torch
+import numpy as np
+from pcdet.ops.iou3d_nms import iou3d_nms_utils
+
+
+# TODO(farzad): Pass only scores and labels?
+#               Calculate overlap inside update or compute?
+#               Change the states to TP, FP, FN, etc?
+#               Calculate incrementally based on summarized value?
+
+class KITTIEVAL(Metric):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # TODO(farzad): Move some of these to init args
+        current_classes = ['Car', 'Pedestrian', 'Cyclist']
+        self.metric = 2
+        overlap_0_7 = np.array([[0.7, 0.5, 0.5, 0.7,
+                                 0.5, 0.7], [0.7, 0.5, 0.5, 0.7, 0.5, 0.7],
+                                [0.7, 0.5, 0.5, 0.7, 0.5, 0.7]])
+        self.min_overlaps = np.expand_dims(overlap_0_7, axis=0)  # [1, 3, 5]
+        class_to_name = {0: 'Car', 1: 'Pedestrian', 2: 'Cyclist', 3: 'Van', 4: 'Person_sitting', 5: 'Truck'}
+        name_to_class = {v: n for n, v in class_to_name.items()}
+        if not isinstance(current_classes, (list, tuple)):
+            current_classes = [current_classes]
+        current_classes_int = []
+        for curcls in current_classes:
+            if isinstance(curcls, str):
+                current_classes_int.append(name_to_class[curcls])
+            else:
+                current_classes_int.append(curcls)
+        self.current_classes = current_classes_int
+        self.min_overlaps = self.min_overlaps[:, :, self.current_classes]
+
+        # TODO(farzad) make sure if dist_reduce_fx should be 'cat'
+        self.add_state("detections", default=[], dist_reduce_fx='cat')
+        self.add_state("groundtruths", default=[], dist_reduce_fx='cat')
+        self.add_state("overlaps", default=[], dist_reduce_fx='cat')
+
+    def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor]) -> None:
+        assert len(targets) == len(preds) == 1, 'Should be first tested with batch_size 1 for the naive/initial impl.!'
+        assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
+
+        # TODO(farzad) should we clone and detach? if so, then profile memory consumption.
+        preds = [pred_box.clone().detach() for pred_box in preds]
+        targets = [gt_box.clone().detach() for gt_box in targets]
+        pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
+
+        for i in range(len(preds)):
+            valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
+            valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
+            # TODO(farzad) Check for valid_mast of pred_scores?
+            valid_pred_boxes = preds[i][valid_preds_mask]
+            valid_gt_boxes = targets[i][valid_gts_mask]
+
+            # Starting class indices from zero
+            valid_pred_boxes[:, -1] -= 1
+            valid_gt_boxes[:, -1] -= 1
+
+            # Adding predicted scores as the last column
+            valid_pred_boxes = torch.cat([valid_pred_boxes, pred_scores[i].unsqueeze(dim=-1)], dim=-1)
+
+            num_gts = valid_gts_mask.sum()
+            num_preds = valid_preds_mask.sum()
+            overlap = valid_gts_mask.new_zeros((num_preds, num_gts))
+            if num_gts > 0 and num_preds > 0:
+                # TODO(farzad) IoU computation in CPU might be faster due to smaller preds_x_gts matrix
+                overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
+
+            self.detections.append(valid_pred_boxes)
+            self.groundtruths.append(valid_gt_boxes)
+            self.overlaps.append(overlap)
+
+    def compute(self):
+        results = eval_class(self.groundtruths, self.detections, self.current_classes,
+                             self.metric, self.min_overlaps, self.overlaps)
+        mAP_3d = get_mAP(results["precision"])
+        mAP_3d_R40 = get_mAP_R40(results["precision"])
+        results.update({"mAP_3d": mAP_3d, "mAP_3d_R40": mAP_3d_R40})
+
+        return results
+
+
+def eval_class(gt_annos,
+               dt_annos,
+               current_classes,
+               metric,
+               min_overlaps,
+               overlaps):
+    """Kitti eval. support 2d/bev/3d/aos eval. support 0.5:0.05:0.95 coco AP.
+    Args:
+        gt_annos: dict, must from get_label_annos() in kitti_common.py
+        dt_annos: dict, must from get_label_annos() in kitti_common.py
+        current_classes: list of int, 0: car, 1: pedestrian, 2: cyclist
+        difficultys: list of int. eval difficulty, 0: easy, 1: normal, 2: hard
+        metric: eval type. 0: bbox, 1: bev, 2: 3d
+        min_overlaps: float, min overlap. format: [num_overlap, metric, class].
+        num_parts: int. a parameter for fast calculate algorithm
+
+    Returns:
+        dict of recall, precision and aos
+    """
+    # TODO(farzad) Assuming class labels in gt and dt start from 0
+
+    N_SAMPLE_PTS = 41
+    num_minoverlap = len(min_overlaps)
+    num_class = len(current_classes)
+    precision = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
+    recall = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
+    detailed_stats = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS, 5])  # TP, FP, FN, Similarity, thresholds
+    raw_precision = np.zeros_like(precision)
+    raw_recall = np.zeros_like(recall)
+
+    for m, current_class in enumerate(current_classes):
+        rets = _prepare_data(gt_annos, dt_annos, current_class)
+        (gt_datas_list, dt_datas_list, ignored_gts, ignored_dets,
+         dontcares, total_dc_num, total_num_valid_gt) = rets
+        for k, min_overlap in enumerate(min_overlaps[:, metric, m]):
+            thresholdss = []
+            for i in range(len(gt_annos)):
+                rets = compute_statistics_jit(overlaps[i], gt_datas_list[i], dt_datas_list[i], ignored_gts[i],
+                                              ignored_dets[i], dontcares[i], metric, min_overlap=min_overlap,
+                                              thresh=0.0, compute_fp=False)
+                tp, fp, fn, similarity, thresholds = rets
+                thresholdss += thresholds.tolist()
+            thresholdss = np.array(thresholdss)
+            thresholds = get_thresholds(thresholdss, total_num_valid_gt)
+            thresholds = np.array(thresholds)
+            pr = np.zeros([len(thresholds), 4])
+            for i in range(len(gt_annos)):
+                for t, thresh in enumerate(thresholds):
+                    tp, fp, fn, similarity, _ = compute_statistics_jit(overlaps[i], gt_datas_list[i],
+                                                                       dt_datas_list[i], ignored_gts[i],
+                                                                       ignored_dets[i], dontcares[i],
+                                                                       metric, min_overlap=min_overlap,
+                                                                       thresh=thresh, compute_fp=True)
+                    pr[t, 0] += tp
+                    pr[t, 1] += fp
+                    pr[t, 2] += fn
+                    if similarity != -1:
+                        pr[t, 3] += similarity
+
+            for i in range(len(thresholds)):
+                detailed_stats[m, k, i, 0] = pr[i, 0]
+                detailed_stats[m, k, i, 1] = pr[i, 1]
+                detailed_stats[m, k, i, 2] = pr[i, 2]
+                detailed_stats[m, k, i, 3] = pr[i, 3]
+                detailed_stats[m, k, i, 4] = thresholds[i]
+
+            for i in range(len(thresholds)):
+                recall[m, k, i] = pr[i, 0] / (pr[i, 0] + pr[i, 2])
+                precision[m, k, i] = pr[i, 0] / (pr[i, 0] + pr[i, 1])
+
+            raw_recall[m, k] = recall[m, k]
+            raw_precision[m, k] = precision[m, k]
+            for i in range(len(thresholds)):
+                precision[m, k, i] = np.max(
+                    precision[m, k, i:], axis=-1)
+                recall[m, k, i] = np.max(recall[m, k, i:], axis=-1)
+
+    ret_dict = {
+        "recall": recall,
+        "precision": precision,
+        "detailed_stats": detailed_stats,
+        "raw_recall": raw_recall,
+        "raw_precision": raw_precision
+    }
+    return ret_dict
+
+
+def _prepare_data(gt_annos, dt_annos, current_class):
+    gt_datas_list = []
+    dt_datas_list = []
+    total_dc_num = []
+    ignored_gts, ignored_dets, dontcares = [], [], []
+    total_num_valid_gt = 0
+    for i in range(len(gt_annos)):
+        rets = clean_data(gt_annos[i], dt_annos[i], current_class)
+        num_valid_gt, ignored_gt, ignored_det, dc_bboxes = rets
+        ignored_gts.append(np.array(ignored_gt, dtype=np.int64))
+        ignored_dets.append(np.array(ignored_det, dtype=np.int64))
+        if len(dc_bboxes) == 0:
+            dc_bboxes = np.zeros((0, 4)).astype(np.float64)
+        else:
+            dc_bboxes = np.stack(dc_bboxes, 0).astype(np.float64)
+        total_dc_num.append(dc_bboxes.shape[0])
+        dontcares.append(dc_bboxes)
+        total_num_valid_gt += num_valid_gt
+        gt_datas_list.append(gt_annos[i])
+        dt_datas_list.append(dt_annos[i])
+    total_dc_num = np.stack(total_dc_num, axis=0)
+    return (gt_datas_list, dt_datas_list, ignored_gts, ignored_dets, dontcares,
+            total_dc_num, total_num_valid_gt)
+
+
+def clean_data(gt_anno, dt_anno, current_class):
+    dc_bboxes, ignored_gt, ignored_dt = [], [], []
+    # TODO(farzad) hardcoded
+    num_gt = gt_anno.numel() // 8  # len(gt_anno["name"])
+    num_dt = dt_anno.numel() // 9  # len(dt_anno["name"])
+    num_valid_gt = 0
+    # TODO(farzad) cleanup and parallelize
+    for i in range(num_gt):
+        gt_cls_ind = gt_anno[i][-1]
+        if (gt_cls_ind == current_class):
+            ignored_gt.append(0)
+            num_valid_gt += 1
+        else:
+            ignored_gt.append(-1)
+
+    for i in range(num_dt):
+        dt_cls_ind = dt_anno[i][-2]
+        if (dt_cls_ind == current_class):
+            ignored_dt.append(0)
+        else:
+            ignored_dt.append(-1)
+
+    return num_valid_gt, ignored_gt, ignored_dt, dc_bboxes
+
+
+def compute_statistics_jit(overlaps,
+                           gt_datas,
+                           dt_datas,
+                           ignored_gt,
+                           ignored_det,
+                           dc_bboxes,
+                           metric,
+                           min_overlap,
+                           thresh=0,
+                           compute_fp=False):
+    det_size = dt_datas.shape[0]
+    gt_size = gt_datas.shape[0]
+    dt_scores = dt_datas[:, -1]
+
+    assigned_detection = [False] * det_size
+    ignored_threshold = [False] * det_size
+    if compute_fp:
+        for i in range(det_size):
+            if (dt_scores[i] < thresh):
+                ignored_threshold[i] = True
+    NO_DETECTION = -10000000
+    tp, fp, fn, similarity = 0, 0, 0, 0
+    thresholds = np.zeros((gt_size,))
+    thresh_idx = 0
+
+    for i in range(gt_size):
+        if ignored_gt[i] == -1:
+            continue
+        det_idx = -1
+        valid_detection = NO_DETECTION
+        max_overlap = 0
+        assigned_ignored_det = False
+
+        for j in range(det_size):
+            if (ignored_det[j] == -1):
+                continue
+            if (assigned_detection[j]):
+                continue
+            if (ignored_threshold[j]):
+                continue
+            overlap = overlaps[j, i]
+            dt_score = dt_scores[j]
+            if (not compute_fp and (overlap > min_overlap)
+                    and dt_score > valid_detection):
+                det_idx = j
+                valid_detection = dt_score
+            elif (compute_fp and (overlap > min_overlap)
+                  and (overlap > max_overlap or assigned_ignored_det)
+                  and ignored_det[j] == 0):
+                max_overlap = overlap
+                det_idx = j
+                valid_detection = 1
+                assigned_ignored_det = False
+            elif (compute_fp and (overlap > min_overlap)
+                  and (valid_detection == NO_DETECTION)
+                  and ignored_det[j] == 1):
+                det_idx = j
+                valid_detection = 1
+                assigned_ignored_det = True
+
+        if (valid_detection == NO_DETECTION) and ignored_gt[i] == 0:
+            fn += 1
+        elif ((valid_detection != NO_DETECTION)
+              and (ignored_gt[i] == 1 or ignored_det[det_idx] == 1)):
+            assigned_detection[det_idx] = True
+        elif valid_detection != NO_DETECTION:
+            tp += 1
+            # thresholds.append(dt_scores[det_idx])
+            thresholds[thresh_idx] = dt_scores[det_idx]
+            thresh_idx += 1
+            assigned_detection[det_idx] = True
+    if compute_fp:
+        for i in range(det_size):
+            if (not (assigned_detection[i] or ignored_det[i] == -1
+                     or ignored_det[i] == 1 or ignored_threshold[i])):
+                fp += 1
+
+    return tp, fp, fn, similarity, thresholds[:thresh_idx]
+
+
+def get_thresholds(scores: np.ndarray, num_gt, num_sample_pts=41):
+    scores.sort()
+    scores = scores[::-1]
+    current_recall = 0
+    thresholds = []
+    for i, score in enumerate(scores):
+        l_recall = (i + 1) / num_gt
+        if i < (len(scores) - 1):
+            r_recall = (i + 2) / num_gt
+        else:
+            r_recall = l_recall
+        if (((r_recall - current_recall) < (current_recall - l_recall))
+                and (i < (len(scores) - 1))):
+            continue
+        # recall = l_recall
+        thresholds.append(score)
+        current_recall += 1 / (num_sample_pts - 1.0)
+    return thresholds
+
+
+def get_mAP(prec):
+    sums = 0
+    for i in range(0, prec.shape[-1], 4):
+        sums = sums + prec[..., i]
+    return sums / 11 * 100
+
+
+def get_mAP_R40(prec):
+    sums = 0
+    for i in range(1, prec.shape[-1]):
+        sums = sums + prec[..., i]
+    return sums / 40 * 100
 
 
 def _stats(pred_infos, gt_infos):
-
     pred_infos = pickle.load(open(pred_infos, 'rb'))
     gt_infos = pickle.load(open(gt_infos, 'rb'))
     gt_annos = [info['annos'] for info in gt_infos]

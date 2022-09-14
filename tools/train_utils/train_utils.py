@@ -6,7 +6,7 @@ import tqdm
 import time
 from torch.nn.utils import clip_grad_norm_
 from pcdet.utils import common_utils, commu_utils
-
+from matplotlib import pyplot as plt
 
 def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, accumulated_iter, optim_cfg,
                     rank, tbar, total_it_each_epoch, dataloader_iter, tb_log=None, leave_pbar=False):
@@ -83,6 +83,8 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
                     # print(key, val)
                     if isinstance(val, dict):
                         tb_log.add_scalars('train/' + key, val, accumulated_iter)
+                    elif isinstance(val, plt.Figure):
+                        tb_log.add_figure('train/' + key, val, accumulated_iter)
                     else:
                         tb_log.add_scalar('train/' + key, val, accumulated_iter)
     if rank == 0:

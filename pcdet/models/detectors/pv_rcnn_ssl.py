@@ -6,12 +6,13 @@ import torch.nn.functional as F
 from pcdet.datasets.augmentor.augmentor_utils import *
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 from pcdet.utils.cal_quality_utils import MetricRegistry
+from matplotlib import pyplot as plt
 
 from ...utils import common_utils
 from .detector3d_template import Detector3DTemplate
 from collections import defaultdict
 from.pv_rcnn import PVRCNN
-
+from ...utils.stats_utils import KITTIEVAL
 
 def _to_dict_of_tensors(list_of_dicts, agg_mode='stack'):
     new_dict = {}
@@ -120,6 +121,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.supervise_mode = model_cfg.SUPERVISE_MODE
 
         self.metric_registry = MetricRegistry(self.dataset.class_names)
+        self.map_metric = KITTIEVAL()
 
     def forward(self, batch_dict):
         if self.training:
@@ -228,6 +230,11 @@ class PVRCNN_SSL(Detector3DTemplate):
                 batch_dict['gt_boxes'][unlabeled_inds, ...], batch_dict['scale'][unlabeled_inds, ...]
             )
 
+            ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
+            pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
+            self.map_metric(pseudo_boxes_list, ori_unlabeled_boxes_list, pseudo_scores)
+            new_statistics = self.calc_statistics_new()  # TODO(farzad) call it every few iterations!
+
             statistics = self.calc_statistics(batch_dict['gt_boxes'][unlabeled_inds], ori_unlabeled_boxes, True,
                                               tag='after_filtering',
                                               pseudo_sem_scores=pseudo_sem_scores)
@@ -300,7 +307,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     tb_dict_[key] = tb_dict[key]
 
             tb_dict_.update(statistics)
-
+            tb_dict_.update(new_statistics)
             tb_dict_['max_box_num'] = max([torch.logical_not(torch.all(box == 0, dim=-1)).sum().item() for box in ori_unlabeled_boxes])
             tb_dict_['max_pseudo_box_num'] = max([torch.logical_not(torch.all(box == 0, dim=-1)).sum().item() for box in batch_dict['gt_boxes'][unlabeled_inds]])
 
@@ -316,6 +323,67 @@ class PVRCNN_SSL(Detector3DTemplate):
             pred_dicts, recall_dicts = self.pv_rcnn.post_processing(batch_dict)
 
             return pred_dicts, recall_dicts, {}
+
+    def calc_statistics_new(self):
+
+        results = self.map_metric.compute()
+
+        statistics = {}
+
+        # Get calculated TPs, FPs, FNs
+        # Early results might not be correct as the 41 values are initialized with zero
+        # and only a few predictions are available and thus a few thresholds are non-zero.
+        # Therefore, mean over several zero values results in low final value.
+        # detailed_stats shape (3, 1, 41, 5) where last dim is
+        # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
+        num_batch = max(len(self.map_metric.detections), 1)
+        detailed_stats = results['detailed_stats']
+        for m, metric_name in enumerate(['tps', 'fps', 'fns']):
+            class_metrics_all = {}
+            class_metrics_batch = {}
+            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                metric_value = detailed_stats[c, 0, :, m].sum().item()
+                class_metrics_all[cls_name] = metric_value
+                class_metrics_batch[cls_name] = metric_value / num_batch
+            statistics['all_' + metric_name] = class_metrics_all
+            statistics['batch_' + metric_name] = class_metrics_batch
+
+        # Get calculated Precision
+        for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
+            class_metrics_all = {}
+            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                metric_value = results[metric_name][c].item()
+                class_metrics_all[cls_name] = metric_value
+            statistics[metric_name] = class_metrics_all
+
+        # Get calculated recall
+        for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+            statistics['max_recall'] = results['raw_recall'][c].max().item()
+            statistics['mean_recall'] = results['raw_recall'][c].mean().item()
+
+        # Draw Precision-Recall curves
+        fig, axs = plt.subplots(1, 3, figsize=(12, 4), gridspec_kw={'wspace': 0.5})
+        # plt.tight_layout()
+        for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+            thresholds = results['detailed_stats'][c, 0, ::-1, -1]
+            prec = results['raw_precision'][c, 0, ::-1]
+            rec = results['raw_recall'][c, 0, ::-1]
+            valid_mask = ~((rec == 0) | (prec == 0))
+
+            ax_c = axs[c]
+            ax_c_twin = ax_c.twinx()
+            ax_c.plot(thresholds[valid_mask], prec[valid_mask], 'b-')
+            ax_c_twin.plot(thresholds[valid_mask], rec[valid_mask], 'r-')
+            ax_c.set_title(cls_name)
+            ax_c.set_xlabel('Foreground score')
+            ax_c.set_ylabel('Precision', color='b')
+            ax_c_twin.set_ylabel('Recall', color='r')
+
+        prec_rec_fig = fig.get_figure()
+        statistics['prec_rec_fig'] = prec_rec_fig
+
+        return statistics
+
 
     # TODO(farzad) Warning: this method has two types of stats: one maintaining their stats over batches, e.g., TP, FP
     #  and two reset state after each batch. Use update_metrics flag if you want call the method twice in different
