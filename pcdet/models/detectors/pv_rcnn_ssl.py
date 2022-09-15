@@ -216,11 +216,11 @@ class PVRCNN_SSL(Detector3DTemplate):
             # NOTE: Need to store them in batch_dict in a new key, which can be removed later
             batch_dict['pseudo_boxes_prefilter'] = torch.zeros_like(batch_dict['gt_boxes'])
             self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds, key='pseudo_boxes_prefilter')
-            
+
             # apply student's augs on teacher's pseudo-boxes (w/o filtered)
             batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='pseudo_boxes_prefilter')
 
-            statistics_prefilter = self.calc_statistics(batch_dict['pseudo_boxes_prefilter'][unlabeled_inds], 
+            statistics_prefilter = self.calc_statistics(batch_dict['pseudo_boxes_prefilter'][unlabeled_inds],
                                                         ori_unlabeled_boxes, True,
                                                         tag='before_filtering',
                                                         pseudo_sem_scores=pseudo_sem_scores)
@@ -353,7 +353,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             class_metrics_all = {}
             class_metrics_batch = {}
             for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                metric_value = detailed_stats[c, 0, :, m].sum().item()
+                metric_value = detailed_stats[c, 0, :, m].max().item()
                 class_metrics_all[cls_name] = metric_value
                 class_metrics_batch[cls_name] = metric_value / num_batch
             statistics['all_' + metric_name] = class_metrics_all

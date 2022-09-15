@@ -59,16 +59,18 @@ class KITTIEVAL(Metric):
         for i in range(len(preds)):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
             valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
-            # TODO(farzad) Check for valid_mast of pred_scores?
+            if pred_scores[i].ndim == 1:
+                pred_scores[i] = pred_scores[i].unsqueeze(dim=-1)
+            valid_pred_scores_mask = torch.logical_not(torch.all(pred_scores[i] == 0, dim=-1))
             valid_pred_boxes = preds[i][valid_preds_mask]
             valid_gt_boxes = targets[i][valid_gts_mask]
-
+            valid_pred_scores = pred_scores[i][valid_pred_scores_mask]
             # Starting class indices from zero
             valid_pred_boxes[:, -1] -= 1
             valid_gt_boxes[:, -1] -= 1
 
             # Adding predicted scores as the last column
-            valid_pred_boxes = torch.cat([valid_pred_boxes, pred_scores[i].unsqueeze(dim=-1)], dim=-1)
+            valid_pred_boxes = torch.cat([valid_pred_boxes, valid_pred_scores], dim=-1)
 
             num_gts = valid_gts_mask.sum()
             num_preds = valid_preds_mask.sum()
@@ -205,9 +207,9 @@ def _prepare_data(gt_annos, dt_annos, current_class):
 
 def clean_data(gt_anno, dt_anno, current_class):
     dc_bboxes, ignored_gt, ignored_dt = [], [], []
-    # TODO(farzad) hardcoded
-    num_gt = gt_anno.numel() // 8  # len(gt_anno["name"])
-    num_dt = dt_anno.numel() // 9  # len(dt_anno["name"])
+
+    num_gt = len(gt_anno)  # len(gt_anno["name"])
+    num_dt = len(dt_anno)  # len(dt_anno["name"])
     num_valid_gt = 0
     # TODO(farzad) cleanup and parallelize
     for i in range(num_gt):
