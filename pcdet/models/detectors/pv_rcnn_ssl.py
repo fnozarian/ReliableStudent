@@ -246,7 +246,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
             pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
-            self.map_metric(pseudo_boxes_list, ori_unlabeled_boxes_list, pseudo_scores)
+            self.map_metric.update(pseudo_boxes_list, ori_unlabeled_boxes_list, pseudo_scores)
             new_statistics = self.calc_statistics_new()  # TODO(farzad) call it every few iterations!
 
             for cur_module in self.pv_rcnn.module_list:
