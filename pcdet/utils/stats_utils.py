@@ -117,11 +117,11 @@ def eval_class(gt_annos,
     N_SAMPLE_PTS = 41
     num_minoverlap = len(min_overlaps)
     num_class = len(current_classes)
-    precision = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
-    recall = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
-    detailed_stats = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS, 5])  # TP, FP, FN, Similarity, thresholds
-    raw_precision = np.zeros_like(precision)
-    raw_recall = np.zeros_like(recall)
+    precision = np.nan * np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
+    recall = np.nan * np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
+    detailed_stats = np.nan * np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS, 5])  # TP, FP, FN, Similarity, thresholds
+    raw_precision = np.nan * np.zeros_like(precision)
+    raw_recall = np.nan * np.zeros_like(recall)
 
     for m, current_class in enumerate(current_classes):
         rets = _prepare_data(gt_annos, dt_annos, current_class)
@@ -166,9 +166,9 @@ def eval_class(gt_annos,
             raw_recall[m, k] = recall[m, k]
             raw_precision[m, k] = precision[m, k]
             for i in range(len(thresholds)):
-                precision[m, k, i] = np.max(
+                precision[m, k, i] = np.nanmax(
                     precision[m, k, i:], axis=-1)
-                recall[m, k, i] = np.max(recall[m, k, i:], axis=-1)
+                recall[m, k, i] = np.nanmax(recall[m, k, i:], axis=-1)
 
     ret_dict = {
         "recall": recall,
@@ -331,17 +331,19 @@ def get_thresholds(scores: np.ndarray, num_gt, num_sample_pts=41):
 
 
 def get_mAP(prec):
-    sums = 0
-    for i in range(0, prec.shape[-1], 4):
-        sums = sums + prec[..., i]
-    return sums / 11 * 100
-
+    # sums = 0
+    # for i in range(0, prec.shape[-1], 4):
+    #     sums = sums + prec[..., i]
+    # return sums / 11 * 100
+    return np.nanmean(prec[..., ::4], axis=-1) * 100
 
 def get_mAP_R40(prec):
-    sums = 0
-    for i in range(1, prec.shape[-1]):
-        sums = sums + prec[..., i]
-    return sums / 40 * 100
+    # sums = 0
+    # for i in range(1, prec.shape[-1]):
+    #     sums = sums + prec[..., i]
+    # return sums / 40 * 100
+    return np.nanmean(prec[..., 1:], axis=-1) * 100
+
 
 
 def _stats(pred_infos, gt_infos):

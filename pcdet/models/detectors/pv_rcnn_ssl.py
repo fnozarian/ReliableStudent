@@ -353,7 +353,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             class_metrics_all = {}
             class_metrics_batch = {}
             for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                metric_value = detailed_stats[c, 0, :, m].max().item()
+                metric_value = np.nanmax(detailed_stats[c, 0, :, m])
                 class_metrics_all[cls_name] = metric_value
                 class_metrics_batch[cls_name] = metric_value / num_batch
             statistics['all_' + metric_name] = class_metrics_all
@@ -370,7 +370,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         # Get calculated recall
         class_metrics_all = {}
         for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-            class_metrics_all[cls_name] = results['raw_recall'][c].max().item()
+            class_metrics_all[cls_name] = np.nanmax(results['raw_recall'][c])
         statistics['max_recall'] = class_metrics_all
 
         # Draw Precision-Recall curves
