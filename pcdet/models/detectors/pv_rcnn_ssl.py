@@ -1,6 +1,7 @@
 import copy
 import os
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from pcdet.datasets.augmentor.augmentor_utils import *
@@ -354,8 +355,9 @@ class PVRCNN_SSL(Detector3DTemplate):
             class_metrics_batch = {}
             for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
                 metric_value = np.nanmax(detailed_stats[c, 0, :, m])
-                class_metrics_all[cls_name] = metric_value
-                class_metrics_batch[cls_name] = metric_value / num_batch
+                if not np.isnan(metric_value):
+                    class_metrics_all[cls_name] = metric_value
+                    class_metrics_batch[cls_name] = metric_value / num_batch
             statistics['all_' + metric_name] = class_metrics_all
             statistics['batch_' + metric_name] = class_metrics_batch
 
@@ -364,13 +366,16 @@ class PVRCNN_SSL(Detector3DTemplate):
             class_metrics_all = {}
             for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
                 metric_value = results[metric_name][c].item()
-                class_metrics_all[cls_name] = metric_value
+                if not np.isnan(metric_value):
+                    class_metrics_all[cls_name] = metric_value
             statistics[metric_name] = class_metrics_all
 
         # Get calculated recall
         class_metrics_all = {}
         for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-            class_metrics_all[cls_name] = np.nanmax(results['raw_recall'][c])
+            metric_value = np.nanmax(results['raw_recall'][c])
+            if not np.isnan(metric_value):
+                class_metrics_all[cls_name] = metric_value
         statistics['max_recall'] = class_metrics_all
 
         # Draw Precision-Recall curves
@@ -438,13 +443,6 @@ class PVRCNN_SSL(Detector3DTemplate):
                     self.metric_registry.get(tag).update_metrics_of_all_classes(valid_pred_boxes, valid_gt_boxes, preds_iou_max,
                                                                                 fg_thresh, assigned_gt_inds,
                                                                                 valid_pred_boxes[:, -1])
-            else:
-                nan = float('nan')
-                statistics['sem_score_fgs'].append(nan)
-                statistics['sem_score_bgs'].append(nan)
-                statistics['pseudo_ious'].append(nan)
-                statistics['pseudo_accs'].append(nan)
-                statistics['pseudo_fgs'].append(nan)
 
             if update_metrics:
                 if num_gts > 0 and num_preds == 0:
