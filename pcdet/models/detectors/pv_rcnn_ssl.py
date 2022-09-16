@@ -316,7 +316,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     tb_dict_[key] = tb_dict[key]
 
-            tb_dict_.update(statistics_prefilter)
+            # tb_dict_.update(statistics_prefilter)
             tb_dict_.update(statistics_postfilter)
             tb_dict_.update(new_statistics)
             tb_dict_['max_box_num'] = max([torch.logical_not(torch.all(box == 0, dim=-1)).sum().item() for box in ori_unlabeled_boxes])
@@ -368,9 +368,10 @@ class PVRCNN_SSL(Detector3DTemplate):
             statistics[metric_name] = class_metrics_all
 
         # Get calculated recall
+        class_metrics_all = {}
         for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-            statistics['max_recall'] = results['raw_recall'][c].max().item()
-            statistics['mean_recall'] = results['raw_recall'][c].mean().item()
+            class_metrics_all[cls_name] = results['raw_recall'][c].max().item()
+        statistics['max_recall'] = class_metrics_all
 
         # Draw Precision-Recall curves
         fig, axs = plt.subplots(1, 3, figsize=(12, 4), gridspec_kw={'wspace': 0.5})
