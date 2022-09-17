@@ -12,6 +12,7 @@ from torchmetrics import Metric
 import torch
 import numpy as np
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
+import math
 
 
 # TODO(farzad): Pass only scores and labels?
@@ -119,7 +120,7 @@ def eval_class(gt_annos,
     num_class = len(current_classes)
     precision = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
     recall = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
-    detailed_stats = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS, 5])  # TP, FP, FN, Similarity, thresholds
+    detailed_stats = np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS, 8])  # TP, FP, FN, Similarity, thresholds, assignment_err
     raw_precision = np.zeros_like(precision)
     raw_recall = np.zeros_like(recall)
 
@@ -133,19 +134,25 @@ def eval_class(gt_annos,
                 rets = compute_statistics_jit(overlaps[i], gt_datas_list[i], dt_datas_list[i], ignored_gts[i],
                                               ignored_dets[i], dontcares[i], metric, min_overlap=min_overlap,
                                               thresh=0.0, compute_fp=False)
-                tp, fp, fn, similarity, thresholds = rets
+                tp, fp, fn, similarity, thresholds, *_ = rets
                 thresholdss += thresholds.tolist()
             thresholdss = np.array(thresholdss)
             thresholds = get_thresholds(thresholdss, total_num_valid_gt)
             thresholds = np.array(thresholds)
-            pr = np.zeros([len(thresholds), 4])
+            pr = np.zeros([len(thresholds), 7])
             for i in range(len(gt_annos)):
                 for t, thresh in enumerate(thresholds):
-                    tp, fp, fn, similarity, _ = compute_statistics_jit(overlaps[i], gt_datas_list[i],
+                    tp, fp, fn, similarity, _, tp_indices, gt_indices = compute_statistics_jit(overlaps[i], gt_datas_list[i],
                                                                        dt_datas_list[i], ignored_gts[i],
                                                                        ignored_dets[i], dontcares[i],
                                                                        metric, min_overlap=min_overlap,
                                                                        thresh=thresh, compute_fp=True)
+                    if 0 < tp:
+                        assignment_err = cal_tp_metric(dt_datas_list[i][tp_indices], gt_datas_list[i][gt_indices])
+                        pr[t, 4] += assignment_err[0]
+                        pr[t, 5] += assignment_err[1]
+                        pr[t, 6] += assignment_err[2]
+
                     pr[t, 0] += tp
                     pr[t, 1] += fp
                     pr[t, 2] += fn
@@ -158,6 +165,9 @@ def eval_class(gt_annos,
                 detailed_stats[m, k, i, 2] = pr[i, 2]
                 detailed_stats[m, k, i, 3] = pr[i, 3]
                 detailed_stats[m, k, i, 4] = thresholds[i]
+                detailed_stats[m, k, i, 5] = pr[i, 4] / pr[i, 0]
+                detailed_stats[m, k, i, 6] = pr[i, 5] / pr[i, 0]
+                detailed_stats[m, k, i, 7] = pr[i, 6] / pr[i, 0]
 
             for i in range(len(thresholds)):
                 recall[m, k, i] = pr[i, 0] / (pr[i, 0] + pr[i, 2])
@@ -252,6 +262,8 @@ def compute_statistics_jit(overlaps,
                 ignored_threshold[i] = True
     NO_DETECTION = -10000000
     tp, fp, fn, similarity = 0, 0, 0, 0
+    tp_indices = []
+    gt_indices = []
     thresholds = np.zeros((gt_size,))
     thresh_idx = 0
 
@@ -297,6 +309,8 @@ def compute_statistics_jit(overlaps,
             assigned_detection[det_idx] = True
         elif valid_detection != NO_DETECTION:
             tp += 1
+            tp_indices.append(det_idx)
+            gt_indices.append(i)
             # thresholds.append(dt_scores[det_idx])
             thresholds[thresh_idx] = dt_scores[det_idx]
             thresh_idx += 1
@@ -307,7 +321,57 @@ def compute_statistics_jit(overlaps,
                      or ignored_det[i] == 1 or ignored_threshold[i])):
                 fp += 1
 
-    return tp, fp, fn, similarity, thresholds[:thresh_idx]
+    return tp, fp, fn, similarity, thresholds[:thresh_idx], np.array(tp_indices), np.array(gt_indices)
+
+
+def cor_angle_range(angle):
+    """ correct angle range to [-pi, pi]
+    Args:
+        angle:
+    Returns:
+    """
+    gt_pi_mask = angle > np.pi
+    lt_minus_pi_mask = angle < - np.pi
+    angle[gt_pi_mask] = angle[gt_pi_mask] - 2 * np.pi
+    angle[lt_minus_pi_mask] = angle[lt_minus_pi_mask] + 2 * np.pi
+
+    return angle
+
+
+def cal_angle_diff(angle1, angle2):
+    # angle is from x to y, anti-clockwise
+    angle1 = cor_angle_range(angle1)
+    angle2 = cor_angle_range(angle2)
+
+    diff = torch.abs(angle1 - angle2)
+    gt_pi_mask = diff > math.pi
+    diff[gt_pi_mask] = 2 * math.pi - diff[gt_pi_mask]
+
+    return diff
+
+
+def cal_tp_metric(tp_boxes, gt_boxes):
+    assert tp_boxes.shape[0] == gt_boxes.shape[0]
+    # L2 distance xy only
+    center_distance = torch.norm(tp_boxes[:, :2] - gt_boxes[:, :2], dim=1)
+    trans_err = center_distance.sum().item()
+
+    # Angle difference
+    angle_diff = cal_angle_diff(tp_boxes[:, 6], gt_boxes[:, 6])
+    assert angle_diff.sum() >= 0
+    orient_err = angle_diff.sum().item()
+
+    # Scale difference
+    aligned_tp_boxes = tp_boxes.detach().clone()
+    # shift their center together
+    aligned_tp_boxes[:, 0:3] = gt_boxes[:, 0:3]
+    # align their angle
+    aligned_tp_boxes[:, 6] = gt_boxes[:, 6]
+    iou_matrix = iou3d_nms_utils.boxes_iou3d_gpu(aligned_tp_boxes[:, 0:7], gt_boxes[:, 0:7])
+    max_ious, _ = torch.max(iou_matrix, dim=1)
+    scale_err = (1 - max_ious).sum().item()
+
+    return trans_err, orient_err, scale_err
 
 
 def get_thresholds(scores: np.ndarray, num_gt, num_sample_pts=41):

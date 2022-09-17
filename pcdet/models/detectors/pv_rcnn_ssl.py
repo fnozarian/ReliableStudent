@@ -349,7 +349,9 @@ class PVRCNN_SSL(Detector3DTemplate):
         # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
         num_batch = max(len(self.map_metric.detections), 1)
         detailed_stats = results['detailed_stats']
-        for m, metric_name in enumerate(['tps', 'fps', 'fns']):
+        for m, metric_name in enumerate(['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
+            if metric_name == 'sim' or metric_name == 'thresh':
+                continue
             class_metrics_all = {}
             class_metrics_batch = {}
             for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
@@ -376,7 +378,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         fig, axs = plt.subplots(1, 3, figsize=(12, 4), gridspec_kw={'wspace': 0.5})
         # plt.tight_layout()
         for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-            thresholds = results['detailed_stats'][c, 0, ::-1, -1]
+            thresholds = results['detailed_stats'][c, 0, ::-1, 4]
             prec = results['raw_precision'][c, 0, ::-1]
             rec = results['raw_recall'][c, 0, ::-1]
             valid_mask = ~((rec == 0) | (prec == 0))
