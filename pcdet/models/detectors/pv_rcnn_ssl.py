@@ -1,6 +1,7 @@
 import copy
 import os
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from pcdet.datasets.augmentor.augmentor_utils import *
@@ -246,7 +247,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
             pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
-            self.map_metric.update(pseudo_boxes_list, ori_unlabeled_boxes_list, pseudo_scores)
+            self.map_metric.update(pseudo_boxes_list, ori_unlabeled_boxes_list, pseudo_scores, pseudo_sem_scores)
             new_statistics = self.calc_statistics_new()  # TODO(farzad) call it every few iterations!
 
             for cur_module in self.pv_rcnn.module_list:
@@ -358,6 +359,16 @@ class PVRCNN_SSL(Detector3DTemplate):
                 metric_value = detailed_stats[c, 0, :, m].max().item()
                 class_metrics_all[cls_name] = metric_value
                 class_metrics_batch[cls_name] = metric_value / num_batch
+            statistics['all_' + metric_name] = class_metrics_all
+            statistics['batch_' + metric_name] = class_metrics_batch
+
+        for m, metric_name in enumerate(['pseudo_ious', 'pseudo_accs', 'pseudo_fgs', 'sem_score_fgs', 'sem_score_bgs']):
+            class_metrics_all = {}
+            class_metrics_batch = {}
+            res = np.array(results[metric_name])
+            metric_value = res.max().item()
+            class_metrics_all[metric_name] = metric_value
+            class_metrics_batch[metric_name] = metric_value / num_batch
             statistics['all_' + metric_name] = class_metrics_all
             statistics['batch_' + metric_name] = class_metrics_batch
 
