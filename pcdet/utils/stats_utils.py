@@ -48,17 +48,26 @@ class KITTIEVAL(Metric):
         self.add_state("detections", default=[], dist_reduce_fx='cat')
         self.add_state("groundtruths", default=[], dist_reduce_fx='cat')
         self.add_state("overlaps", default=[], dist_reduce_fx='cat')
+        self.add_state("mean_iou", default=torch.zeros(1), dist_reduce_fx='mean')
+        self.add_state("pseudo_accs", default=torch.zeros(1), dist_reduce_fx='mean')
+        self.add_state("pseudo_fgs", default=torch.zeros(1), dist_reduce_fx='mean')
+        self.add_state("sem_score_fgs", default=torch.zeros(1), dist_reduce_fx='mean')
+        self.add_state("sem_score_bgs", default=torch.zeros(1), dist_reduce_fx='mean')
 
-    def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor], pseudo_sem_scores: [torch.Tensor]) -> None:
-        assert len(targets) == len(preds) == 1, 'Should be first tested with batch_size 1 for the naive/initial impl.!'
+    def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor], pseudo_sem_score: [torch.Tensor]) -> None:
+        # assert len(targets) == len(preds) == 1, 'Should be first tested with batch_size 1 for the naive/initial impl.!'
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
-
+        assert len(pred_scores) == len(pseudo_sem_score)
         # TODO(farzad) should we clone and detach? if so, then profile memory consumption.
         preds = [pred_box.clone().detach() for pred_box in preds]
         targets = [gt_box.clone().detach() for gt_box in targets]
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
-        pseudo_sem_scores = [ps_score.clone().detach() for ps_score in pseudo_sem_scores]
-
+        pseudo_sem_scores = [score.clone().detach() for score in pseudo_sem_score]
+        pseudo_ious = []
+        pseudo_accs = []
+        pseudo_fgs = []
+        sem_score_fgs = []
+        sem_score_bgs = []
         for i in range(len(preds)):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
             valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
@@ -77,7 +86,7 @@ class KITTIEVAL(Metric):
             valid_gt_boxes[:, -1] -= 1
 
             # Adding predicted scores as the last column
-            valid_pred_boxes = torch.cat([valid_pred_boxes, valid_sem_scores, valid_pred_scores], dim=-1)
+            valid_pred_boxes = torch.cat([valid_pred_boxes, valid_pred_scores], dim=-1)
 
             num_gts = valid_gts_mask.sum()
             num_preds = valid_preds_mask.sum()
@@ -85,63 +94,50 @@ class KITTIEVAL(Metric):
             if num_gts > 0 and num_preds > 0:
                 # TODO(farzad) IoU computation in CPU might be faster due to smaller preds_x_gts matrix
                 overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
+                preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
+                pseudo_ious.append(preds_iou_max.mean().item())
+
+                acc = (valid_pred_boxes[:, -2] == valid_gt_boxes[assigned_gt_inds, -1]).float().mean()
+                pseudo_accs.append(acc.item())
+
+                fg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
+                bg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
+                fg = (preds_iou_max > fg_thresh).float().mean().item()
+                pseudo_fgs.append(fg)
+
+                pseudo_sem_scores_ = valid_sem_scores
+                sem_score_fg = (pseudo_sem_scores_ * (preds_iou_max > fg_thresh).float()).sum() \
+                               / torch.clamp((preds_iou_max > fg_thresh).sum(), min=1.0)
+                sem_score_bg = (pseudo_sem_scores_ * (preds_iou_max < bg_thresh).float()).sum() \
+                               / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
+
+                sem_score_fgs.append(sem_score_fg.item())
+                sem_score_bgs.append(sem_score_bg.item())
+
 
             self.detections.append(valid_pred_boxes)
             self.groundtruths.append(valid_gt_boxes)
             self.overlaps.append(overlap)
 
+        self.pseudo_ious = np.mean(pseudo_ious)
+        self.pseudo_accs = np.mean(pseudo_accs)
+        self.pseudo_fgs = np.mean(pseudo_fgs)
+        self.sem_score_fgs = np.mean(sem_score_fgs)
+        self.sem_score_bgs = np.mean(sem_score_bgs)
+
     def compute(self):
         results = eval_class(self.groundtruths, self.detections, self.current_classes,
                              self.metric, self.min_overlaps, self.overlaps)
-        results.update(old_statistics(self.groundtruths, self.detections))
+        results['pseudo_ious'] = self.pseudo_ious
+        results['pseudo_accs'] = self.pseudo_accs
+        results['pseudo_fgs'] = self.pseudo_fgs
+        results['sem_score_fgs'] = self.sem_score_fgs
+        results['sem_score_bgs'] = self.sem_score_bgs
         mAP_3d = get_mAP(results["precision"])
         mAP_3d_R40 = get_mAP_R40(results["precision"])
         results.update({"mAP_3d": mAP_3d, "mAP_3d_R40": mAP_3d_R40})
 
         return results
-
-
-def old_statistics(gt_annos, dt_annos):
-    # dt_annos: box information [0-7] , class , sem score , pred score
-    pseudo_ious = []
-    pseudo_accs = []
-    pseudo_fgs = []
-    sem_score_fgs = []
-    sem_score_bgs = []
-    for i in range(len(dt_annos)):
-        num_gts = gt_annos[i].shape[0]
-        num_preds = dt_annos[i].shape[0]
-        if num_gts > 0 and num_preds > 0:
-            pred_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(dt_annos[i][:, 0:7], gt_annos[i][:, 0:7])
-            preds_iou_max, assigned_gt_inds = pred_by_gt_overlap.max(dim=1)
-
-            pseudo_ious.append(preds_iou_max.mean().item())
-
-            acc = (dt_annos[i][:, -3] == gt_annos[i][assigned_gt_inds, -1]).float().mean()
-            pseudo_accs.append(acc.item())
-
-            fg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
-            bg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
-            fg = (preds_iou_max > fg_thresh).float().mean().item()
-            pseudo_fgs.append(fg)
-
-            pseudo_sem_scores = dt_annos[i][:, -2]
-            sem_score_fg = (pseudo_sem_scores * (preds_iou_max > fg_thresh).float()).sum() \
-                           / torch.clamp((preds_iou_max > fg_thresh).sum(), min=1.0)
-            sem_score_bg = (pseudo_sem_scores * (preds_iou_max < bg_thresh).float()).sum() \
-                           / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
-
-            sem_score_fgs.append(sem_score_fg.item())
-            sem_score_bgs.append(sem_score_bg.item())
-
-    ret_dict = {
-        "pseudo_ious": pseudo_ious,
-        "pseudo_accs": pseudo_accs,
-        "pseudo_fgs": pseudo_fgs,
-        "sem_score_fgs": pseudo_fgs,
-        "sem_score_bgs": sem_score_bgs
-    }
-    return ret_dict
 
 def eval_class(gt_annos,
                dt_annos,

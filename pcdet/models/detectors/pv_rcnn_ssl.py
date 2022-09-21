@@ -227,10 +227,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                                                         pseudo_sem_scores=pseudo_sem_scores)
             batch_dict.pop('pseudo_boxes_prefilter')
             ################################
-
             pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
                 self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
-
             # TODO(farzad) Do not use examples with zero pseudo_boxes after filtering! Otherwise roi layer continues
             #  sampling ROI_PER_IMAGE backgrounds (w/o FGs) which might be confusing because some of the pseudo-labels
             #  with high objectness score and low sem score might have been filtered.
@@ -363,14 +361,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             statistics['batch_' + metric_name] = class_metrics_batch
 
         for m, metric_name in enumerate(['pseudo_ious', 'pseudo_accs', 'pseudo_fgs', 'sem_score_fgs', 'sem_score_bgs']):
-            class_metrics_all = {}
-            class_metrics_batch = {}
-            res = np.array(results[metric_name])
-            metric_value = res.max().item()
-            class_metrics_all[metric_name] = metric_value
-            class_metrics_batch[metric_name] = metric_value / num_batch
-            statistics['all_' + metric_name] = class_metrics_all
-            statistics['batch_' + metric_name] = class_metrics_batch
+            statistics['batch_' + metric_name] = results[metric_name]
 
         # Get calculated Precision
         for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
