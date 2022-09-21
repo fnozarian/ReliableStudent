@@ -12,7 +12,7 @@ from torchmetrics import Metric
 import torch
 import numpy as np
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
-
+import torch.distributed as dist
 
 # TODO(farzad): Pass only scores and labels?
 #               Calculate overlap inside update or compute?
@@ -20,6 +20,7 @@ from pcdet.ops.iou3d_nms import iou3d_nms_utils
 #               Calculate incrementally based on summarized value?
 
 class KITTIEVAL(Metric):
+    full_state_update: bool = False
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # TODO(farzad): Move some of these to init args
@@ -42,20 +43,19 @@ class KITTIEVAL(Metric):
         self.current_classes = current_classes_int
         self.min_overlaps = self.min_overlaps[:, :, self.current_classes]
 
-        # TODO(farzad) make sure if dist_reduce_fx should be 'cat'
-        self.add_state("detections", default=[], dist_reduce_fx='cat')
-        self.add_state("groundtruths", default=[], dist_reduce_fx='cat')
-        self.add_state("overlaps", default=[], dist_reduce_fx='cat')
+        self.add_state("detections", default=[])
+        self.add_state("groundtruths", default=[])
+        self.add_state("overlaps", default=[])
+        self.add_state("pseudo_ious", default=[], dist_reduce_fx='cat')
 
     def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor]) -> None:
-        assert len(targets) == len(preds) == 1, 'Should be first tested with batch_size 1 for the naive/initial impl.!'
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
 
         # TODO(farzad) should we clone and detach? if so, then profile memory consumption.
         preds = [pred_box.clone().detach() for pred_box in preds]
         targets = [gt_box.clone().detach() for gt_box in targets]
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
-
+        pseudo_ious = []
         for i in range(len(preds)):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
             valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
@@ -78,10 +78,15 @@ class KITTIEVAL(Metric):
             if num_gts > 0 and num_preds > 0:
                 # TODO(farzad) IoU computation in CPU might be faster due to smaller preds_x_gts matrix
                 overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
-
+                preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
+                pseudo_ious.append(preds_iou_max.mean())
+            # The following states are accumulated over updates
             self.detections.append(valid_pred_boxes)
             self.groundtruths.append(valid_gt_boxes)
             self.overlaps.append(overlap)
+
+        # The following states are reset on every update (per-batch states)
+        self.pseudo_ious = [torch.tensor(pseudo_ious).cuda().mean()]
 
     def compute(self):
         results = eval_class(self.groundtruths, self.detections, self.current_classes,
@@ -89,7 +94,7 @@ class KITTIEVAL(Metric):
         mAP_3d = get_mAP(results["precision"])
         mAP_3d_R40 = get_mAP_R40(results["precision"])
         results.update({"mAP_3d": mAP_3d, "mAP_3d_R40": mAP_3d_R40})
-
+        results['pseudo_ious'] = self.pseudo_ious.mean()
         return results
 
 

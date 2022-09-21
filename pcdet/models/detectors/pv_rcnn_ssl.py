@@ -14,6 +14,7 @@ from .detector3d_template import Detector3DTemplate
 from collections import defaultdict
 from.pv_rcnn import PVRCNN
 from ...utils.stats_utils import KITTIEVAL
+import torch.distributed as dist
 
 def _to_dict_of_tensors(list_of_dicts, agg_mode='stack'):
     new_dict = {}
@@ -320,6 +321,8 @@ class PVRCNN_SSL(Detector3DTemplate):
             # tb_dict_.update(statistics_prefilter)
             tb_dict_.update(statistics_postfilter)
             tb_dict_.update(new_statistics)
+            rank = os.getenv('RANK')
+            tb_dict_[f'bs_rank_{rank}'] = int(batch_dict['gt_boxes'].shape[0])
             tb_dict_['max_box_num'] = max([torch.logical_not(torch.all(box == 0, dim=-1)).sum().item() for box in ori_unlabeled_boxes])
             tb_dict_['max_pseudo_box_num'] = max([torch.logical_not(torch.all(box == 0, dim=-1)).sum().item() for box in batch_dict['gt_boxes'][unlabeled_inds]])
 
