@@ -98,9 +98,13 @@ class KITTIEVAL(Metric):
 
                 acc = (valid_pred_boxes[:, -2] == valid_gt_boxes[assigned_gt_inds, -1]).float().mean()
                 pseudo_accs.append(acc)
+                try:
+                    fg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
+                    bg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
+                except KeyError:
+                    fg_thresh = 0.75
+                    bg_thresh = 0.25
 
-                fg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
-                bg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
                 fg = (preds_iou_max > fg_thresh).float().mean().item()
                 pseudo_fgs.append(fg)
 
