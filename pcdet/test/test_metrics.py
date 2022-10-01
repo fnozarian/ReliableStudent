@@ -118,7 +118,7 @@ from stats_utils import KITTIEVAL
 #     dataloader_iter = iter(dataloader)
 #     batch = next(dataloader_iter)
 #     res = model(*batch)
-#     calculated = res['pseudo_ious']
+#     calculated = res['pseudo_ious'].cpu().numpy()
 #     expected = np.mean(dataset.pseudo_ious)
 #     print(f"calculated: {calculated}")
 #     print(f"expected: {expected}")
@@ -197,12 +197,34 @@ class MyDataset(torch_data.Dataset):
                                                   [0.0000],
                                                   [0.0000]])
                                     ]
+        self.pred_sem_scores_dataset = [torch.tensor([[0.7000],
+                                                      [0.6000],
+                                                      [0.5000],
+                                                      [0.4000],
+                                                      [0.3000],
+                                                      [0.2000],
+                                                      [0.9000],
+                                                      [0.0000],
+                                                      [0.0000],
+                                                      [0.0000]]),
+                                        torch.tensor([[0.9000],
+                                                      [0.7000],
+                                                      [0.0000],
+                                                      [0.0000],
+                                                      [0.0000],
+                                                      [0.0000],
+                                                      [0.0000],
+                                                      [0.0000],
+                                                      [0.0000],
+                                                      [0.0000]])
+                                        ]
         self.pseudo_ious = [0.7289696335792542, 0.6714359521865845]
 
     def __getitem__(self, index):
         return (self.preds_dataset[index].cuda(),
                 self.targets_dataset[index].cuda(),
-                self.pred_scores_dataset[index].cuda())
+                self.pred_scores_dataset[index].cuda(),
+                self.pred_sem_scores_dataset[index].cuda())
 
     def __len__(self):
         return len(self.preds_dataset)
@@ -213,8 +235,8 @@ class MyTestModule(torch.nn.Module):
         super().__init__()
         self.map_metric = KITTIEVAL()
 
-    def forward(self, pseudo_boxes_list, ori_boxes_list, pseudo_scores):
-        self.map_metric.update(pseudo_boxes_list, ori_boxes_list, pseudo_scores)
+    def forward(self, pseudo_boxes_list, ori_boxes_list, pseudo_scores, pseudo_sem_scores):
+        self.map_metric.update(pseudo_boxes_list, ori_boxes_list, pseudo_scores, pseudo_sem_scores)
         results = self.map_metric.compute()
         return results
 

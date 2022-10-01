@@ -165,7 +165,7 @@ def eval_class(gt_annos,
     num_class = len(current_classes)
     precision = np.nan * np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
     recall = np.nan * np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS])
-    detailed_stats = np.nan * np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS, 5])  # TP, FP, FN, Similarity, thresholds
+    detailed_stats = np.nan * np.zeros([num_class, num_minoverlap, N_SAMPLE_PTS, 8])  # TP, FP, FN, Similarity, thresholds
     raw_precision = np.nan * np.zeros_like(precision)
     raw_recall = np.nan * np.zeros_like(recall)
 
