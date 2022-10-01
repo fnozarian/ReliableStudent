@@ -48,11 +48,11 @@ class KITTIEVAL(Metric):
         self.add_state("detections", default=[])
         self.add_state("groundtruths", default=[])
         self.add_state("overlaps", default=[])
-        self.add_state("pseudo_ious", default=[], dist_reduce_fx='cat')
-        self.add_state("pseudo_accs", default=[], dist_reduce_fx='cat')
-        self.add_state("pseudo_fgs", default=[], dist_reduce_fx='cat')
-        self.add_state("sem_score_fgs", default=[], dist_reduce_fx='cat')
-        self.add_state("sem_score_bgs", default=[], dist_reduce_fx='cat')
+        self.add_state("pseudo_ious", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("pseudo_accs", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("pseudo_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("sem_score_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("sem_score_bgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
 
     def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor], pseudo_sem_score: [torch.Tensor]) -> None:
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
@@ -123,11 +123,11 @@ class KITTIEVAL(Metric):
             self.overlaps.append(overlap)
 
         # The following states are reset on every update (per-batch states)
-        self.pseudo_ious = [torch.tensor(pseudo_ious).cuda().mean()]
-        self.pseudo_accs = [torch.tensor(pseudo_accs).cuda().mean()]
-        self.pseudo_fgs = [torch.tensor(pseudo_fgs).cuda().mean()]
-        self.sem_score_fgs = [torch.tensor(sem_score_fgs).cuda().mean()]
-        self.sem_score_bgs = [torch.tensor(sem_score_bgs).cuda().mean()]
+        self.pseudo_ious = torch.tensor(pseudo_ious).cuda().mean()
+        self.pseudo_accs = torch.tensor(pseudo_accs).cuda().mean()
+        self.pseudo_fgs = torch.tensor(pseudo_fgs).cuda().mean()
+        self.sem_score_fgs = torch.tensor(sem_score_fgs).cuda().mean()
+        self.sem_score_bgs = torch.tensor(sem_score_bgs).cuda().mean()
 
     def compute(self):
         results = eval_class(self.groundtruths, self.detections, self.current_classes,
