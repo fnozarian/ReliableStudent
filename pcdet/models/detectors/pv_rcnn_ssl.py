@@ -228,10 +228,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                                                         pseudo_sem_scores=pseudo_sem_scores)
             batch_dict.pop('pseudo_boxes_prefilter')
             ################################
-
             pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
                 self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
-
             # TODO(farzad) Do not use examples with zero pseudo_boxes after filtering! Otherwise roi layer continues
             #  sampling ROI_PER_IMAGE backgrounds (w/o FGs) which might be confusing because some of the pseudo-labels
             #  with high objectness score and low sem score might have been filtered.
@@ -248,7 +246,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
             pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
-            self.map_metric.update(pseudo_boxes_list, ori_unlabeled_boxes_list, pseudo_scores)
+            self.map_metric.update(pseudo_boxes_list, ori_unlabeled_boxes_list, pseudo_scores, pseudo_sem_scores)
             new_statistics = self.calc_statistics_new()  # TODO(farzad) call it every few iterations!
 
             for cur_module in self.pv_rcnn.module_list:
@@ -353,7 +351,9 @@ class PVRCNN_SSL(Detector3DTemplate):
         # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
         num_batch = max(len(self.map_metric.detections), 1)
         detailed_stats = results['detailed_stats']
-        for m, metric_name in enumerate(['tps', 'fps', 'fns']):
+        for m, metric_name in enumerate(['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
+            if metric_name == 'sim' or metric_name == 'thresh':
+                continue
             class_metrics_all = {}
             class_metrics_batch = {}
             for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
@@ -363,6 +363,9 @@ class PVRCNN_SSL(Detector3DTemplate):
                     class_metrics_batch[cls_name] = metric_value / num_batch
             statistics['all_' + metric_name] = class_metrics_all
             statistics['batch_' + metric_name] = class_metrics_batch
+
+        for m, metric_name in enumerate(['pseudo_ious', 'pseudo_accs', 'pseudo_fgs', 'sem_score_fgs', 'sem_score_bgs']):
+            statistics['batch_' + metric_name] = results[metric_name]
 
         # Get calculated Precision
         for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
@@ -385,7 +388,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         fig, axs = plt.subplots(1, 3, figsize=(12, 4), gridspec_kw={'wspace': 0.5})
         # plt.tight_layout()
         for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-            thresholds = results['detailed_stats'][c, 0, ::-1, -1]
+            thresholds = results['detailed_stats'][c, 0, ::-1, 4]
             prec = results['raw_precision'][c, 0, ::-1]
             rec = results['raw_recall'][c, 0, ::-1]
             valid_mask = ~((rec == 0) | (prec == 0))
