@@ -346,7 +346,6 @@ class PVRCNN_SSL(Detector3DTemplate):
             # compute() takes ~45ms for each sample and linearly increasing
             # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
             results = self.metrics[tag].compute(stats_only=False)
-            self.metrics['before_filtering'].reset()
         else:
             results = self.metrics[tag].compute()
 
@@ -359,6 +358,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         # detailed_stats shape (3, 1, 41, 5) where last dim is
         # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
         if 'detailed_stats' in results.keys():
+            # total_num_samples depends on states. Metric rest() should be called afterward.
             total_num_samples = max(len(self.metrics[tag].detections), 1)
             detailed_stats = results['detailed_stats']
             for m, metric_name in enumerate(['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
@@ -411,6 +411,9 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             prec_rec_fig = fig.get_figure()
             statistics['prec_rec_fig'] = prec_rec_fig
+
+            # kitti eval stats should be reset after one epoch due to intractability
+            self.metrics['before_filtering'].reset()
 
         other_stats = ['pred_ious', 'pred_accs', 'pred_fgs', 'sem_score_fgs',
                        'sem_score_bgs', 'num_pred_boxes', 'num_gt_boxes']
