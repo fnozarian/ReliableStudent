@@ -27,11 +27,11 @@ class KITTIEVAL(Metric):
         super().__init__(**kwargs)
         # TODO(farzad): Move some of these to init args
         current_classes = ['Car', 'Pedestrian', 'Cyclist']
-        self.metric = 2
-        overlap_0_7 = np.array([[0.7, 0.5, 0.5, 0.7,
-                                 0.5, 0.7], [0.7, 0.5, 0.5, 0.7, 0.5, 0.7],
+        self.metric = 2  # evaluation only for 3D metric (2)
+        overlap_0_7 = np.array([[0.7, 0.5, 0.5, 0.7, 0.5, 0.7],
+                                [0.7, 0.5, 0.5, 0.7, 0.5, 0.7],
                                 [0.7, 0.5, 0.5, 0.7, 0.5, 0.7]])
-        self.min_overlaps = np.expand_dims(overlap_0_7, axis=0)  # [1, 3, 5]
+        self.min_overlaps = np.expand_dims(overlap_0_7, axis=0)  # [1, num_metrics, num_cls][1, 3, 6]
         class_to_name = {0: 'Car', 1: 'Pedestrian', 2: 'Cyclist', 3: 'Van', 4: 'Person_sitting', 5: 'Truck'}
         name_to_class = {v: n for n, v in class_to_name.items()}
         if not isinstance(current_classes, (list, tuple)):
@@ -48,38 +48,43 @@ class KITTIEVAL(Metric):
         self.add_state("detections", default=[])
         self.add_state("groundtruths", default=[])
         self.add_state("overlaps", default=[])
-        self.add_state("pseudo_ious", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("pseudo_accs", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("pseudo_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("pred_ious", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("pred_accs", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("pred_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
         self.add_state("sem_score_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
         self.add_state("sem_score_bgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("num_pred_boxes", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("num_gt_boxes", default=torch.tensor((0,)), dist_reduce_fx='cat')
 
-    def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor], pseudo_sem_score: [torch.Tensor]) -> None:
+    def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor], pred_sem_scores: [torch.Tensor]) -> None:
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
-        assert len(pred_scores) == len(pseudo_sem_score)
+        assert len(pred_scores) == len(pred_sem_scores)
         # TODO(farzad) should we clone and detach? if so, then profile memory consumption.
         preds = [pred_box.clone().detach() for pred_box in preds]
         targets = [gt_box.clone().detach() for gt_box in targets]
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
-        pseudo_sem_scores = [score.clone().detach() for score in pseudo_sem_score]
-        pseudo_ious = []
-        pseudo_accs = []
-        pseudo_fgs = []
+        pred_sem_scores = [score.clone().detach() for score in pred_sem_scores]
+        pred_ious = []
+        pred_accs = []
+        pred_fgs = []
         sem_score_fgs = []
         sem_score_bgs = []
+        num_pred_boxes = []
+        num_gt_boxes = []
         for i in range(len(preds)):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
             valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
             if pred_scores[i].ndim == 1:
                 pred_scores[i] = pred_scores[i].unsqueeze(dim=-1)
-            if pseudo_sem_scores[i].ndim == 1:
-                pseudo_sem_scores[i] = pseudo_sem_scores[i].unsqueeze(dim=-1)
+            if pred_sem_scores[i].ndim == 1:
+                pred_sem_scores[i] = pred_sem_scores[i].unsqueeze(dim=-1)
             valid_pred_scores_mask = torch.logical_not(torch.all(pred_scores[i] == 0, dim=-1))
-            valid_sem_scores_mask = torch.logical_not(torch.all(pseudo_sem_scores[i] == 0, dim=-1))
+            valid_sem_scores_mask = torch.logical_not(torch.all(pred_sem_scores[i] == 0, dim=-1))
             valid_pred_boxes = preds[i][valid_preds_mask]
             valid_gt_boxes = targets[i][valid_gts_mask]
             valid_pred_scores = pred_scores[i][valid_pred_scores_mask]
-            valid_sem_scores = pseudo_sem_scores[i][valid_sem_scores_mask]
+            valid_sem_scores = pred_sem_scores[i][valid_sem_scores_mask]
+
             # Starting class indices from zero
             valid_pred_boxes[:, -1] -= 1
             valid_gt_boxes[:, -1] -= 1
@@ -89,15 +94,17 @@ class KITTIEVAL(Metric):
 
             num_gts = valid_gts_mask.sum()
             num_preds = valid_preds_mask.sum()
+            num_pred_boxes.append(num_preds)
+            num_gt_boxes.append(num_gts)
             overlap = valid_gts_mask.new_zeros((num_preds, num_gts))
             if num_gts > 0 and num_preds > 0:
                 # TODO(farzad) IoU computation in CPU might be faster due to smaller preds_x_gts matrix
                 overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
                 preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
-                pseudo_ious.append(preds_iou_max.mean())
+                pred_ious.append(preds_iou_max.mean())
 
                 acc = (valid_pred_boxes[:, -2] == valid_gt_boxes[assigned_gt_inds, -1]).float().mean()
-                pseudo_accs.append(acc)
+                pred_accs.append(acc)
                 try:
                     fg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
                     bg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
@@ -106,12 +113,11 @@ class KITTIEVAL(Metric):
                     bg_thresh = 0.25
 
                 fg = (preds_iou_max > fg_thresh).float().mean().item()
-                pseudo_fgs.append(fg)
+                pred_fgs.append(fg)
 
-                pseudo_sem_scores_ = valid_sem_scores
-                sem_score_fg = (pseudo_sem_scores_ * (preds_iou_max > fg_thresh).float()).sum() \
+                sem_score_fg = (valid_sem_scores.squeeze() * (preds_iou_max > fg_thresh).float()).sum() \
                                / torch.clamp((preds_iou_max > fg_thresh).sum(), min=1.0)
-                sem_score_bg = (pseudo_sem_scores_ * (preds_iou_max < bg_thresh).float()).sum() \
+                sem_score_bg = (valid_sem_scores.squeeze() * (preds_iou_max < bg_thresh).float()).sum() \
                                / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
 
                 sem_score_fgs.append(sem_score_fg)
@@ -123,20 +129,24 @@ class KITTIEVAL(Metric):
             self.overlaps.append(overlap)
 
         # The following states are reset on every update (per-batch states)
-        self.pseudo_ious = torch.tensor(pseudo_ious).cuda().mean()
-        self.pseudo_accs = torch.tensor(pseudo_accs).cuda().mean()
-        self.pseudo_fgs = torch.tensor(pseudo_fgs).cuda().mean()
+        self.pred_ious = torch.tensor(pred_ious).cuda().mean()
+        self.pred_accs = torch.tensor(pred_accs).cuda().mean()
+        self.pred_fgs = torch.tensor(pred_fgs).cuda().mean()
         self.sem_score_fgs = torch.tensor(sem_score_fgs).cuda().mean()
         self.sem_score_bgs = torch.tensor(sem_score_bgs).cuda().mean()
+        self.num_pred_boxes = torch.tensor(num_pred_boxes).cuda().float().mean()
+        self.num_gt_boxes = torch.tensor(num_gt_boxes).cuda().float().mean()
 
     def compute(self):
         results = eval_class(self.groundtruths, self.detections, self.current_classes,
                              self.metric, self.min_overlaps, self.overlaps)
-        results['pseudo_ious'] = self.pseudo_ious.mean()
-        results['pseudo_accs'] = self.pseudo_accs.mean()
-        results['pseudo_fgs'] = self.pseudo_fgs.mean()
+        results['pred_ious'] = self.pred_ious.mean()
+        results['pred_accs'] = self.pred_accs.mean()
+        results['pred_fgs'] = self.pred_fgs.mean()
         results['sem_score_fgs'] = self.sem_score_fgs.mean()
         results['sem_score_bgs'] = self.sem_score_bgs.mean()
+        results['num_pred_boxes'] = self.num_pred_boxes.mean()
+        results['num_gt_boxes'] = self.num_gt_boxes.mean()
         mAP_3d = get_mAP(results["precision"])
         mAP_3d_R40 = get_mAP_R40(results["precision"])
         results.update({"mAP_3d": mAP_3d, "mAP_3d_R40": mAP_3d_R40})

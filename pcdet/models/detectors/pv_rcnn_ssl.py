@@ -122,8 +122,8 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.no_nms = model_cfg.NO_NMS
         self.supervise_mode = model_cfg.SUPERVISE_MODE
 
-        self.metric_registry = MetricRegistry(self.dataset.class_names)
-        self.map_metric = KITTIEVAL()
+        self.metrics = {'before_filtering': KITTIEVAL(),
+                        'after_filtering': KITTIEVAL()}
 
     def forward(self, batch_dict):
         if self.training:
@@ -210,7 +210,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             TODO (shashank) : Needs to be refactored (can also be made into a single function call)
             '''
             ################################
-            pseudo_boxes, pseudo_labels, _, pseudo_sem_scores, _, _ = self._unpack_predictions(pred_dicts_ens, unlabeled_inds)
+            pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores, _, _ = self._unpack_predictions(pred_dicts_ens, unlabeled_inds)
             pseudo_boxes = [torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1) \
                 for (pseudo_box, pseudo_label) in zip(pseudo_boxes, pseudo_labels)]
             
@@ -222,10 +222,12 @@ class PVRCNN_SSL(Detector3DTemplate):
             # apply student's augs on teacher's pseudo-boxes (w/o filtered)
             batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='pseudo_boxes_prefilter')
 
-            statistics_prefilter = self.calc_statistics(batch_dict['pseudo_boxes_prefilter'][unlabeled_inds],
-                                                        ori_unlabeled_boxes, True,
-                                                        tag='before_filtering',
-                                                        pseudo_sem_scores=pseudo_sem_scores)
+            metric_inputs = {'preds': batch_dict['pseudo_boxes_prefilter'][unlabeled_inds],
+                             'targets': ori_unlabeled_boxes,
+                             'pred_scores': pseudo_scores,
+                             'pred_sem_scores': pseudo_sem_scores}
+
+            self.metrics['before_filtering'].update(**metric_inputs)
             batch_dict.pop('pseudo_boxes_prefilter')
             ################################
             pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
@@ -241,13 +243,13 @@ class PVRCNN_SSL(Detector3DTemplate):
             # apply student's augs on teacher's pseudo-labels (filtered) only (not points)
             batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
 
-            statistics_postfilter = self.calc_statistics(batch_dict['gt_boxes'][unlabeled_inds], ori_unlabeled_boxes, True,
-                                               tag='after_filtering', pseudo_sem_scores=pseudo_sem_scores)
-
-            ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
-            pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
-            self.map_metric.update(pseudo_boxes_list, ori_unlabeled_boxes_list, pseudo_scores, pseudo_sem_scores)
-            new_statistics = self.calc_statistics_new()  # TODO(farzad) call it every few iterations!
+            # ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
+            # pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
+            # metric_inputs = {'preds': pseudo_boxes_list,
+            #                  'targets': ori_unlabeled_boxes_list,
+            #                  'pred_scores': pseudo_scores,
+            #                  'pred_sem_scores': pseudo_sem_scores}
+            # self.metrics['after_filtering'].update(**metric_inputs)  # commented to reduce complexity.
 
             for cur_module in self.pv_rcnn.module_list:
                 if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
@@ -316,13 +318,16 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     tb_dict_[key] = tb_dict[key]
 
-            # tb_dict_.update(statistics_prefilter)
-            tb_dict_.update(statistics_postfilter)
-            tb_dict_.update(new_statistics)
-            rank = os.getenv('RANK')
-            tb_dict_[f'bs_rank_{rank}'] = int(batch_dict['gt_boxes'].shape[0])
-            tb_dict_['max_box_num'] = max([torch.logical_not(torch.all(box == 0, dim=-1)).sum().item() for box in ori_unlabeled_boxes])
-            tb_dict_['max_pseudo_box_num'] = max([torch.logical_not(torch.all(box == 0, dim=-1)).sum().item() for box in batch_dict['gt_boxes'][unlabeled_inds]])
+            # TODO(farzad) call it every few iterations!
+            metrics_before_filtering = self.compute_metrics(tag='before_filtering')
+            tb_dict_.update(metrics_before_filtering)
+            # metrics_after_filtering = self.compute_metrics(tag='after_filtering')  # commented to reduce complexity.
+            # tb_dict_.update(metrics_after_filtering)
+            if dist.is_initialized():
+                rank = os.getenv('RANK')
+                tb_dict_[f'bs_rank_{rank}'] = int(batch_dict['gt_boxes'].shape[0])
+            else:
+                tb_dict_[f'bs'] = int(batch_dict['gt_boxes'].shape[0])
 
             ret_dict = {
                 'loss': loss
@@ -337,9 +342,9 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             return pred_dicts, recall_dicts, {}
 
-    def calc_statistics_new(self):
+    def compute_metrics(self, tag):
 
-        results = self.map_metric.compute()
+        results = self.metrics[tag].compute()
 
         statistics = {}
 
@@ -349,7 +354,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         # Therefore, mean over several zero values results in low final value.
         # detailed_stats shape (3, 1, 41, 5) where last dim is
         # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
-        num_batch = max(len(self.map_metric.detections), 1)
+        total_num_samples = max(len(self.metrics[tag].detections), 1)
         detailed_stats = results['detailed_stats']
         for m, metric_name in enumerate(['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
             if metric_name == 'sim' or metric_name == 'thresh':
@@ -359,12 +364,12 @@ class PVRCNN_SSL(Detector3DTemplate):
             for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
                 metric_value = np.nanmax(detailed_stats[c, 0, :, m])
                 if not np.isnan(metric_value):
-                    class_metrics_all[cls_name] = metric_value
-                    class_metrics_batch[cls_name] = metric_value / num_batch
-            statistics['all_' + metric_name] = class_metrics_all
-            statistics['batch_' + metric_name] = class_metrics_batch
+                    # class_metrics_all[cls_name] = metric_value  # commented to reduce complexity.
+                    class_metrics_batch[cls_name] = metric_value / total_num_samples
+            # statistics['all_' + metric_name] = class_metrics_all
+            statistics[metric_name + '_per_sample'] = class_metrics_batch
 
-        for m, metric_name in enumerate(['pseudo_ious', 'pseudo_accs', 'pseudo_fgs', 'sem_score_fgs', 'sem_score_bgs']):
+        for m, metric_name in enumerate(['pred_ious', 'pred_accs', 'pred_fgs', 'sem_score_fgs', 'sem_score_bgs']):
             statistics['batch_' + metric_name] = results[metric_name]
 
         # Get calculated Precision
@@ -405,78 +410,8 @@ class PVRCNN_SSL(Detector3DTemplate):
         prec_rec_fig = fig.get_figure()
         statistics['prec_rec_fig'] = prec_rec_fig
 
-        return statistics
-
-
-    # TODO(farzad) Warning: this method has two types of stats: one maintaining their stats over batches, e.g., TP, FP
-    #  and two reset state after each batch. Use update_metrics flag if you want call the method twice in different
-    #  places during a batch.
-    def calc_statistics(self, pred_boxes, gt_boxes, update_metrics=True, tag=None, **kwargs):
-        assert len(pred_boxes) == len(gt_boxes)
-
-        statistics = defaultdict(list)
-        for i in range(len(pred_boxes)):
-            valid_preds_mask = torch.logical_not(torch.all(pred_boxes[i] == 0, dim=-1))
-            valid_gts_mask = torch.logical_not(torch.all(gt_boxes[i] == 0, dim=-1))
-            num_gts = valid_gts_mask.sum()
-            num_preds = valid_preds_mask.sum()
-            if num_gts > 0 and num_preds > 0:
-                valid_gt_boxes = gt_boxes[i, valid_gts_mask]
-                valid_pred_boxes = pred_boxes[i, valid_preds_mask]
-                pred_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
-                preds_iou_max, assigned_gt_inds = pred_by_gt_overlap.max(dim=1)
-                statistics['pseudo_ious'].append(preds_iou_max.mean().item())
-
-                acc = (valid_pred_boxes[:, -1] == valid_gt_boxes[assigned_gt_inds, -1]).float().mean()
-                statistics['pseudo_accs'].append(acc.item())
-
-                fg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
-                bg_thresh = self.model_cfg['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
-                fg = (preds_iou_max > fg_thresh).float().mean().item()
-                statistics['pseudo_fgs'].append(fg)
-
-                if kwargs['pseudo_sem_scores']:
-                    pseudo_sem_scores = kwargs['pseudo_sem_scores']
-                    sem_score_fg = (pseudo_sem_scores[i] * (preds_iou_max > fg_thresh).float()).sum() \
-                                   / torch.clamp((preds_iou_max > fg_thresh).sum(), min=1.0)
-                    sem_score_bg = (pseudo_sem_scores[i] * (preds_iou_max < bg_thresh).float()).sum() \
-                                   / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
-
-                    statistics['sem_score_fgs'].append(sem_score_fg.item())
-                    statistics['sem_score_bgs'].append(sem_score_bg.item())
-
-                if update_metrics:
-                    self.metric_registry.get(tag).update_metrics_of_all_classes(valid_pred_boxes, valid_gt_boxes, preds_iou_max,
-                                                                                fg_thresh, assigned_gt_inds,
-                                                                                valid_pred_boxes[:, -1])
-
-            if update_metrics:
-                if num_gts > 0 and num_preds == 0:
-                    # Missed GTs. Probably filtered by sem/obj filters --> see the falsely rejected metric
-                    for gt_cls in gt_boxes[i, valid_gts_mask, -1].int():
-                        cls_name = self.dataset.class_names[gt_cls.item()-1]
-                        self.metric_registry.get(tag).get_metrics_of(cls_name).metrics['fn'].update(1)
-                if num_preds > 0 and num_gts == 0:
-                    # False positives. Probably passed sem/obj filters --> see the falsely accepted metric
-                    for pred_cls in pred_boxes[i, valid_preds_mask, -1].int():
-                        cls_name = self.dataset.class_names[pred_cls.item()-1]
-                        self.metric_registry.get(tag).get_metrics_of(cls_name).metrics['fp'].update(1)
-
-        # TODO(farzad) All Metric, ClassWiseMetric and MetricRegistry should be refactored.
-        num_cls = len(self.metric_registry.get(tag).class_names)
-        metrics_name = ['tp', 'fp', 'fn', 'assignment_err', 'cls_err', 'precision', 'recall', 'rej_pseudo_lab']
-        num_metrics = len(metrics_name)
-        cls_metrics = np.zeros((num_cls, num_metrics))
-        for c, cname in enumerate(self.metric_registry.get(tag).class_names):
-            for m, mname in enumerate(metrics_name):
-                mval = self.metric_registry.get(tag).get_metrics_of(cname).metrics[mname]
-                cls_metrics[c, m] = mval.avg
-
-        for m, mname in enumerate(metrics_name):
-            cls_comb_stats = {}
-            for c, cname in enumerate(self.metric_registry.get(tag).class_names):
-                cls_comb_stats[cname] = cls_metrics[c, m]
-            statistics[mname] = cls_comb_stats
+        statistics['num_pred_boxes'] = results['num_pred_boxes']
+        statistics['num_gt_boxes'] = results['num_gt_boxes']
 
         for key, val in statistics.items():
             if isinstance(val, list):
@@ -486,8 +421,6 @@ class PVRCNN_SSL(Detector3DTemplate):
         ret_stats = {}
         for key, val in statistics.items():
             ret_stats[tag + key] = val
-
-        # TODO(farzad) any metrics based on pseudo scores?
 
         return ret_stats
 

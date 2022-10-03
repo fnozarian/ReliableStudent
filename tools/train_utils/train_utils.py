@@ -83,12 +83,16 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
                     if val is None:
                         continue
                     # print(key, val)
+                    subkeys = key.split("/")
+                    cat, key = (subkeys[0] + "/", subkeys[1]) if len(subkeys) > 1 else ('train/', key)
+                    if key in ['bs']:
+                        cat = 'meta_data/'
                     if isinstance(val, dict):
-                        tb_log.add_scalars('train/' + key, val, accumulated_iter)
+                        tb_log.add_scalars(cat + key, val, accumulated_iter)
                     elif isinstance(val, plt.Figure):
-                        tb_log.add_figure('train/' + key, val, accumulated_iter)
+                        tb_log.add_figure(cat + key, val, accumulated_iter)
                     else:
-                        tb_log.add_scalar('train/' + key, val, accumulated_iter)
+                        tb_log.add_scalar(cat + key, val, accumulated_iter)
     if rank == 0:
         pbar.close()
     return accumulated_iter
