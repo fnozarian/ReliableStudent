@@ -137,19 +137,20 @@ class KITTIEVAL(Metric):
         self.num_pred_boxes = torch.tensor(num_pred_boxes).cuda().float().mean()
         self.num_gt_boxes = torch.tensor(num_gt_boxes).cuda().float().mean()
 
-    def compute(self):
-        results = eval_class(self.groundtruths, self.detections, self.current_classes,
-                             self.metric, self.min_overlaps, self.overlaps)
-        results['pred_ious'] = self.pred_ious.mean()
-        results['pred_accs'] = self.pred_accs.mean()
-        results['pred_fgs'] = self.pred_fgs.mean()
-        results['sem_score_fgs'] = self.sem_score_fgs.mean()
-        results['sem_score_bgs'] = self.sem_score_bgs.mean()
-        results['num_pred_boxes'] = self.num_pred_boxes.mean()
-        results['num_gt_boxes'] = self.num_gt_boxes.mean()
-        mAP_3d = get_mAP(results["precision"])
-        mAP_3d_R40 = get_mAP_R40(results["precision"])
-        results.update({"mAP_3d": mAP_3d, "mAP_3d_R40": mAP_3d_R40})
+    def compute(self, stats_only=True):
+        results = {'pred_ious': self.pred_ious.mean(), 'pred_accs': self.pred_accs.mean(),
+                   'pred_fgs': self.pred_fgs.mean(), 'sem_score_fgs': self.sem_score_fgs.mean(),
+                   'sem_score_bgs': self.sem_score_bgs.mean(), 'num_pred_boxes': self.num_pred_boxes.mean(),
+                   'num_gt_boxes': self.num_gt_boxes.mean()}
+
+        if not stats_only:
+            kitti_eval_metrics = eval_class(self.groundtruths, self.detections, self.current_classes,
+                                 self.metric, self.min_overlaps, self.overlaps)
+            mAP_3d = get_mAP(kitti_eval_metrics["precision"])
+            mAP_3d_R40 = get_mAP_R40(kitti_eval_metrics["precision"])
+            kitti_eval_metrics.update({"mAP_3d": mAP_3d, "mAP_3d_R40": mAP_3d_R40})
+            results.update(kitti_eval_metrics)
+
         return results
 
 

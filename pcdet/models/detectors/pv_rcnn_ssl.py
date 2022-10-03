@@ -6,7 +6,6 @@ import torch
 import torch.nn.functional as F
 from pcdet.datasets.augmentor.augmentor_utils import *
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
-from pcdet.utils.cal_quality_utils import MetricRegistry
 from matplotlib import pyplot as plt
 
 from ...utils import common_utils
@@ -318,7 +317,6 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     tb_dict_[key] = tb_dict[key]
 
-            # TODO(farzad) call it every few iterations!
             metrics_before_filtering = self.compute_metrics(tag='before_filtering')
             tb_dict_.update(metrics_before_filtering)
             # metrics_after_filtering = self.compute_metrics(tag='after_filtering')  # commented to reduce complexity.
@@ -344,7 +342,13 @@ class PVRCNN_SSL(Detector3DTemplate):
 
     def compute_metrics(self, tag):
 
-        results = self.metrics[tag].compute()
+        if self.metrics[tag]._update_count == 37:  # TODO(farzad) epoch length is hardcoded.
+            # compute() takes ~45ms for each sample and linearly increasing
+            # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
+            results = self.metrics[tag].compute(stats_only=False)
+            self.metrics['before_filtering'].reset()
+        else:
+            results = self.metrics[tag].compute()
 
         statistics = {}
 
@@ -354,64 +358,65 @@ class PVRCNN_SSL(Detector3DTemplate):
         # Therefore, mean over several zero values results in low final value.
         # detailed_stats shape (3, 1, 41, 5) where last dim is
         # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
-        total_num_samples = max(len(self.metrics[tag].detections), 1)
-        detailed_stats = results['detailed_stats']
-        for m, metric_name in enumerate(['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
-            if metric_name == 'sim' or metric_name == 'thresh':
-                continue
-            class_metrics_all = {}
-            class_metrics_batch = {}
-            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                metric_value = np.nanmax(detailed_stats[c, 0, :, m])
-                if not np.isnan(metric_value):
-                    # class_metrics_all[cls_name] = metric_value  # commented to reduce complexity.
-                    class_metrics_batch[cls_name] = metric_value / total_num_samples
-            # statistics['all_' + metric_name] = class_metrics_all
-            statistics[metric_name + '_per_sample'] = class_metrics_batch
+        if 'detailed_stats' in results.keys():
+            total_num_samples = max(len(self.metrics[tag].detections), 1)
+            detailed_stats = results['detailed_stats']
+            for m, metric_name in enumerate(['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
+                if metric_name == 'sim' or metric_name == 'thresh':
+                    continue
+                class_metrics_all = {}
+                class_metrics_batch = {}
+                for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                    metric_value = np.nanmax(detailed_stats[c, 0, :, m])
+                    if not np.isnan(metric_value):
+                        # class_metrics_all[cls_name] = metric_value  # commented to reduce complexity.
+                        class_metrics_batch[cls_name] = metric_value / total_num_samples
+                # statistics['all_' + metric_name] = class_metrics_all
+                statistics[metric_name + '_per_sample'] = class_metrics_batch
 
-        for m, metric_name in enumerate(['pred_ious', 'pred_accs', 'pred_fgs', 'sem_score_fgs', 'sem_score_bgs']):
-            statistics['batch_' + metric_name] = results[metric_name]
+            # Get calculated Precision
+            for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
+                class_metrics_all = {}
+                for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                    metric_value = results[metric_name][c].item()
+                    if not np.isnan(metric_value):
+                        class_metrics_all[cls_name] = metric_value
+                statistics[metric_name] = class_metrics_all
 
-        # Get calculated Precision
-        for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
+            # Get calculated recall
             class_metrics_all = {}
             for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                metric_value = results[metric_name][c].item()
+                metric_value = np.nanmax(results['raw_recall'][c])
                 if not np.isnan(metric_value):
                     class_metrics_all[cls_name] = metric_value
-            statistics[metric_name] = class_metrics_all
+            statistics['max_recall'] = class_metrics_all
 
-        # Get calculated recall
-        class_metrics_all = {}
-        for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-            metric_value = np.nanmax(results['raw_recall'][c])
-            if not np.isnan(metric_value):
-                class_metrics_all[cls_name] = metric_value
-        statistics['max_recall'] = class_metrics_all
+            # Draw Precision-Recall curves
+            fig, axs = plt.subplots(1, 3, figsize=(12, 4), gridspec_kw={'wspace': 0.5})
+            # plt.tight_layout()
+            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                thresholds = results['detailed_stats'][c, 0, ::-1, 4]
+                prec = results['raw_precision'][c, 0, ::-1]
+                rec = results['raw_recall'][c, 0, ::-1]
+                valid_mask = ~((rec == 0) | (prec == 0))
 
-        # Draw Precision-Recall curves
-        fig, axs = plt.subplots(1, 3, figsize=(12, 4), gridspec_kw={'wspace': 0.5})
-        # plt.tight_layout()
-        for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-            thresholds = results['detailed_stats'][c, 0, ::-1, 4]
-            prec = results['raw_precision'][c, 0, ::-1]
-            rec = results['raw_recall'][c, 0, ::-1]
-            valid_mask = ~((rec == 0) | (prec == 0))
+                ax_c = axs[c]
+                ax_c_twin = ax_c.twinx()
+                ax_c.plot(thresholds[valid_mask], prec[valid_mask], 'b-')
+                ax_c_twin.plot(thresholds[valid_mask], rec[valid_mask], 'r-')
+                ax_c.set_title(cls_name)
+                ax_c.set_xlabel('Foreground score')
+                ax_c.set_ylabel('Precision', color='b')
+                ax_c_twin.set_ylabel('Recall', color='r')
 
-            ax_c = axs[c]
-            ax_c_twin = ax_c.twinx()
-            ax_c.plot(thresholds[valid_mask], prec[valid_mask], 'b-')
-            ax_c_twin.plot(thresholds[valid_mask], rec[valid_mask], 'r-')
-            ax_c.set_title(cls_name)
-            ax_c.set_xlabel('Foreground score')
-            ax_c.set_ylabel('Precision', color='b')
-            ax_c_twin.set_ylabel('Recall', color='r')
+            prec_rec_fig = fig.get_figure()
+            statistics['prec_rec_fig'] = prec_rec_fig
 
-        prec_rec_fig = fig.get_figure()
-        statistics['prec_rec_fig'] = prec_rec_fig
-
-        statistics['num_pred_boxes'] = results['num_pred_boxes']
-        statistics['num_gt_boxes'] = results['num_gt_boxes']
+        other_stats = ['pred_ious', 'pred_accs', 'pred_fgs', 'sem_score_fgs',
+                       'sem_score_bgs', 'num_pred_boxes', 'num_gt_boxes']
+        for m, metric_name in enumerate(other_stats):
+            if metric_name in results.keys():
+                statistics[metric_name] = results[metric_name]
 
         for key, val in statistics.items():
             if isinstance(val, list):
