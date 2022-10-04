@@ -102,15 +102,16 @@ class KITTIEVAL(Metric):
                 overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
                 preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
                 pred_ious.append(preds_iou_max.mean())
-
-                acc = (valid_pred_boxes[:, -2] == valid_gt_boxes[assigned_gt_inds, -1]).float().mean()
+                pred_labels = valid_pred_boxes[:, -2]
+                acc = (pred_labels == valid_gt_boxes[assigned_gt_inds, -1]).float().mean()
                 pred_accs.append(acc)
-                try:
-                    fg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_FG_THRESH']
-                    bg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
-                except KeyError:
-                    fg_thresh = 0.75
-                    bg_thresh = 0.25
+
+                # Using kitti test class-wise fg threshold instead of thresholds used during train.
+                classwise_fg_thresh = self.min_overlaps[0, self.metric]
+                classwise_fg_thresh = pred_labels.new_tensor(classwise_fg_thresh).unsqueeze(dim=0).repeat(pred_labels.shape[0], 1)
+                fg_thresh = classwise_fg_thresh.gather(dim=-1, index=pred_labels.unsqueeze(dim=-1).long()).squeeze()
+
+                bg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
 
                 fg = (preds_iou_max > fg_thresh).float().mean().item()
                 pred_fgs.append(fg)
