@@ -413,7 +413,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             statistics['prec_rec_fig'] = prec_rec_fig
 
             # kitti eval stats should be reset after one epoch due to intractability
-            self.metrics['before_filtering'].reset()
+            self.metrics[tag].reset()
 
         other_stats = ['pred_ious', 'pred_accs', 'pred_fgs', 'sem_score_fgs',
                        'sem_score_bgs', 'num_pred_boxes', 'num_gt_boxes']
