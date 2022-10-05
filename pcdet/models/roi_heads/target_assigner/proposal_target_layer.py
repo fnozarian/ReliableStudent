@@ -50,6 +50,9 @@ class ProposalTargetLayer(nn.Module):
             batch_cls_labels = (fg_mask > 0).float()
             batch_cls_labels[interval_mask] = \
                 (batch_roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
+            # Ignoring all-zero pseudo-labels produced due to filtering
+            ignore_mask = torch.eq(batch_gt_of_rois, 0).all(dim=-1)
+            batch_cls_labels[ignore_mask] = -1
         else:
             raise NotImplementedError
 

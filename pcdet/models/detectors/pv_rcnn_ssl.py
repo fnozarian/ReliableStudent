@@ -231,11 +231,6 @@ class PVRCNN_SSL(Detector3DTemplate):
             ################################
             pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
                 self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
-            # TODO(farzad) Do not use examples with zero pseudo_boxes after filtering! Otherwise roi layer continues
-            #  sampling ROI_PER_IMAGE backgrounds (w/o FGs) which might be confusing because some of the pseudo-labels
-            #  with high objectness score and low sem score might have been filtered.
-            #  Think about filtering based on objectness and sem score separately.
-            #  I.e., what happens if we have PLs with high quality objectness but low quality sem score (or vice versa).
 
             self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
 
