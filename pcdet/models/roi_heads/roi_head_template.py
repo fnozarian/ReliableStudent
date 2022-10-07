@@ -152,11 +152,13 @@ class RoIHeadTemplate(nn.Module):
 
 
         targets_dict['rois'][unlabeled_inds, :num_rois_ema] = batch_dict['rois_ema'][unlabeled_inds]
-        targets_dict['roi_scores'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_scores_ema'][unlabeled_inds]
+        # TODO(farzad) WARNING:roi_scores are not normalized for the labeled data! Ignored bc it's not used in losses.
+        # targets_dict['roi_scores'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_scores_ema'][unlabeled_inds]
         targets_dict['roi_labels'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_labels_ema'][unlabeled_inds]
         targets_dict['gt_of_rois'][unlabeled_inds, :num_rois_ema] = batch_dict['gt_boxes'][unlabeled_inds]
         targets_dict['rcnn_cls_labels'][unlabeled_inds, :num_rois_ema] = batch_dict['pred_scores_ema'][unlabeled_inds]
-        targets_dict['reg_valid_mask'][unlabeled_inds, :num_rois_ema] = 1
+        # TODO(farzad) fixed FG threshold.
+        targets_dict['reg_valid_mask'][unlabeled_inds, :num_rois_ema] = torch.ge(batch_dict['roi_scores_ema'][unlabeled_inds], 0.7).long()
         targets_dict['rcnn_cls_labels'][unlabeled_inds, num_rois_ema:] = -1
         targets_dict['reg_valid_mask'][unlabeled_inds, num_rois_ema:] = 0
         targets_dict['gt_iou_of_rois'][unlabeled_inds, :num_rois_ema] = 0

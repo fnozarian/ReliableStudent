@@ -250,7 +250,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     # Pass teacher's proposal to the student.
                     # To let proposal_layer continues for labeled data we pass rois with _ema postfix
                     batch_dict['rois_ema'] = batch_dict_ema['rois'].detach().clone()
-                    batch_dict['roi_scores_ema'] = batch_dict_ema['roi_scores'].detach().clone()
+                    batch_dict['roi_scores_ema'] = torch.sigmoid(batch_dict_ema['roi_scores'].detach().clone())
                     batch_dict['roi_labels_ema'] = batch_dict_ema['roi_labels'].detach().clone()
                     batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='rois_ema')
                     if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
@@ -265,7 +265,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
                     batch_dict['pred_scores_ema'] = torch.zeros_like(batch_dict['roi_scores_ema'])
                     for i, ui in enumerate(unlabeled_inds):
-                        batch_dict['pred_scores_ema'][ui] = scores[i]
+                        batch_dict['pred_scores_ema'][ui] = torch.sigmoid(scores[i].detach().clone())
                     # TODO(farzad) ENABLE_RELIABILITY option should not necessarily always have var
                     if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
                         batch_dict['pred_scores_ema_var'] = torch.zeros_like(batch_dict['roi_scores_ema'])
