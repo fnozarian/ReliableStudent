@@ -263,6 +263,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     boxes, labels, scores, sem_scores, boxes_var, scores_var = self._unpack_predictions(pred_dicts, unlabeled_inds)
                     pseudo_boxes = [torch.cat([box, label.unsqueeze(-1)], dim=-1) for box, label in zip(boxes, labels)]
                     self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
+                    batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
                     batch_dict['pred_scores_ema'] = torch.zeros_like(batch_dict['roi_scores_ema'])
                     for i, ui in enumerate(unlabeled_inds):
                         batch_dict['pred_scores_ema'][ui] = torch.sigmoid(scores[i].detach().clone())
