@@ -266,7 +266,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
                     batch_dict['pred_scores_ema'] = torch.zeros_like(batch_dict['roi_scores_ema'])
                     for i, ui in enumerate(unlabeled_inds):
-                        batch_dict['pred_scores_ema'][ui] = torch.sigmoid(scores[i].detach().clone())
+                        batch_dict['pred_scores_ema'][ui] = scores[i]
                     # TODO(farzad) ENABLE_RELIABILITY option should not necessarily always have var
                     if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
                         batch_dict['pred_scores_ema_var'] = torch.zeros_like(batch_dict['roi_scores_ema'])
