@@ -80,7 +80,7 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
                 tb_log.add_scalar('train/loss', loss, accumulated_iter)
                 tb_log.add_scalar('meta_data/learning_rate', cur_lr, accumulated_iter)
                 for key, val in tb_dict.items():
-                    if val is None:
+                    if val is None or (isinstance(val, torch.Tensor) and torch.isnan(val)):
                         continue
                     # print(key, val)
                     subkeys = key.split("/")

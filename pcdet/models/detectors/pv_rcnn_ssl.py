@@ -122,8 +122,8 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.supervise_mode = model_cfg.SUPERVISE_MODE
 
         self.metrics = {'before_filtering': KITTIEVAL(),
-                        'after_filtering': KITTIEVAL()}
-
+                        'after_filtering': KITTIEVAL(),
+                        'rcnn_proposals_metrics': KITTIEVAL()}
     def forward(self, batch_dict):
         if self.training:
             labeled_mask = batch_dict['labeled_mask'].view(-1)
@@ -209,25 +209,25 @@ class PVRCNN_SSL(Detector3DTemplate):
             TODO (shashank) : Needs to be refactored (can also be made into a single function call)
             '''
             ################################
-            pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores, _, _ = self._unpack_predictions(pred_dicts_ens, unlabeled_inds)
-            pseudo_boxes = [torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1) \
-                for (pseudo_box, pseudo_label) in zip(pseudo_boxes, pseudo_labels)]
-            
-            # Making consistent # of pseudo boxes in each batch 
-            # NOTE: Need to store them in batch_dict in a new key, which can be removed later
-            batch_dict['pseudo_boxes_prefilter'] = torch.zeros_like(batch_dict['gt_boxes'])
-            self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds, key='pseudo_boxes_prefilter')
-
-            # apply student's augs on teacher's pseudo-boxes (w/o filtered)
-            batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='pseudo_boxes_prefilter')
-
-            metric_inputs = {'preds': batch_dict['pseudo_boxes_prefilter'][unlabeled_inds],
-                             'targets': ori_unlabeled_boxes,
-                             'pred_scores': pseudo_scores,
-                             'pred_sem_scores': pseudo_sem_scores}
-
-            self.metrics['before_filtering'].update(**metric_inputs)
-            batch_dict.pop('pseudo_boxes_prefilter')
+            # pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores, _, _ = self._unpack_predictions(pred_dicts_ens, unlabeled_inds)
+            # pseudo_boxes = [torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1) \
+            #     for (pseudo_box, pseudo_label) in zip(pseudo_boxes, pseudo_labels)]
+            #
+            # # Making consistent # of pseudo boxes in each batch
+            # # NOTE: Need to store them in batch_dict in a new key, which can be removed later
+            # batch_dict['pseudo_boxes_prefilter'] = torch.zeros_like(batch_dict['gt_boxes'])
+            # self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds, key='pseudo_boxes_prefilter')
+            #
+            # # apply student's augs on teacher's pseudo-boxes (w/o filtered)
+            # batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='pseudo_boxes_prefilter')
+            #
+            # metric_inputs = {'preds': batch_dict['pseudo_boxes_prefilter'][unlabeled_inds],
+            #                  'targets': ori_unlabeled_boxes,
+            #                  'pred_scores': pseudo_scores,
+            #                  'pred_sem_scores': pseudo_sem_scores}
+            #
+            # self.metrics['before_filtering'].update(**metric_inputs)
+            # batch_dict.pop('pseudo_boxes_prefilter')
             ################################
             pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
                 self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
@@ -245,6 +245,8 @@ class PVRCNN_SSL(Detector3DTemplate):
             #                  'pred_sem_scores': pseudo_sem_scores}
             # self.metrics['after_filtering'].update(**metric_inputs)  # commented to reduce complexity.
 
+            batch_dict['rcnn_proposals_metrics'] = self.metrics['rcnn_proposals_metrics']
+            batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
             for cur_module in self.pv_rcnn.module_list:
                 if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
                     # Pass teacher's proposal to the student.
@@ -313,10 +315,14 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     tb_dict_[key] = tb_dict[key]
 
-            metrics_before_filtering = self.compute_metrics(tag='before_filtering')
-            tb_dict_.update(metrics_before_filtering)
+            # metrics_before_filtering = self.compute_metrics(tag='before_filtering')
+            # tb_dict_.update(metrics_before_filtering)
             # metrics_after_filtering = self.compute_metrics(tag='after_filtering')  # commented to reduce complexity.
             # tb_dict_.update(metrics_after_filtering)
+
+            metrics_teachers_proposals = self.compute_metrics(tag='rcnn_proposals_metrics')
+            tb_dict_.update(metrics_teachers_proposals)
+
             if dist.is_initialized():
                 rank = os.getenv('RANK')
                 tb_dict_[f'bs_rank_{rank}'] = int(batch_dict['gt_boxes'].shape[0])
@@ -338,7 +344,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
     def compute_metrics(self, tag):
 
-        if self.metrics[tag]._update_count == 37:  # TODO(farzad) epoch length is hardcoded.
+        if self.metrics[tag]._update_count == 37 * 2:  # TODO(farzad) epoch length is hardcoded.
             # compute() takes ~45ms for each sample and linearly increasing
             # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
             results = self.metrics[tag].compute(stats_only=False)

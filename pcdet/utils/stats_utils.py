@@ -78,12 +78,11 @@ class KITTIEVAL(Metric):
                 pred_scores[i] = pred_scores[i].unsqueeze(dim=-1)
             if pred_sem_scores[i].ndim == 1:
                 pred_sem_scores[i] = pred_sem_scores[i].unsqueeze(dim=-1)
-            valid_pred_scores_mask = torch.logical_not(torch.all(pred_scores[i] == 0, dim=-1))
-            valid_sem_scores_mask = torch.logical_not(torch.all(pred_sem_scores[i] == 0, dim=-1))
+
             valid_pred_boxes = preds[i][valid_preds_mask]
             valid_gt_boxes = targets[i][valid_gts_mask]
-            valid_pred_scores = pred_scores[i][valid_pred_scores_mask]
-            valid_sem_scores = pred_sem_scores[i][valid_sem_scores_mask]
+            valid_pred_scores = pred_scores[i][valid_preds_mask.nonzero().view(-1)]
+            valid_sem_scores = pred_sem_scores[i][valid_preds_mask.nonzero().view(-1)]
 
             # Starting class indices from zero
             valid_pred_boxes[:, -1] -= 1
@@ -116,8 +115,9 @@ class KITTIEVAL(Metric):
                 fg = (preds_iou_max > fg_thresh).float().mean().item()
                 pred_fgs.append(fg)
 
-                sem_score_fg = (valid_sem_scores.squeeze() * (preds_iou_max > fg_thresh).float()).sum() \
-                               / torch.clamp((preds_iou_max > fg_thresh).sum(), min=1.0)
+                # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
+                # while without clamp it is N/A, which makes more sense.
+                sem_score_fg = (valid_sem_scores.squeeze() * (preds_iou_max > fg_thresh).float()).sum() / (preds_iou_max > fg_thresh).sum()
                 sem_score_bg = (valid_sem_scores.squeeze() * (preds_iou_max < bg_thresh).float()).sum() \
                                / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
 

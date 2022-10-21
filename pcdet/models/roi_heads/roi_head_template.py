@@ -153,12 +153,12 @@ class RoIHeadTemplate(nn.Module):
 
         targets_dict['rois'][unlabeled_inds, :num_rois_ema] = batch_dict['rois_ema'][unlabeled_inds]
         # TODO(farzad) WARNING:roi_scores are not normalized for the labeled data! Ignored bc it's not used in losses.
-        # targets_dict['roi_scores'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_scores_ema'][unlabeled_inds]
+        targets_dict['roi_scores'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_scores_ema'][unlabeled_inds]
         targets_dict['roi_labels'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_labels_ema'][unlabeled_inds]
         targets_dict['gt_of_rois'][unlabeled_inds, :num_rois_ema] = batch_dict['gt_boxes'][unlabeled_inds]
         targets_dict['rcnn_cls_labels'][unlabeled_inds, :num_rois_ema] = batch_dict['pred_scores_ema'][unlabeled_inds]
         # TODO(farzad) fixed FG threshold.
-        targets_dict['reg_valid_mask'][unlabeled_inds, :num_rois_ema] = torch.ge(batch_dict['roi_scores_ema'][unlabeled_inds], 0.7).long()
+        targets_dict['reg_valid_mask'][unlabeled_inds, :num_rois_ema] = torch.ge(batch_dict['pred_scores_ema'][unlabeled_inds], 0.7).long()
         targets_dict['rcnn_cls_labels'][unlabeled_inds, num_rois_ema:] = -1
         targets_dict['reg_valid_mask'][unlabeled_inds, num_rois_ema:] = 0
         targets_dict['gt_iou_of_rois'][unlabeled_inds, :num_rois_ema] = 0
@@ -180,6 +180,16 @@ class RoIHeadTemplate(nn.Module):
 
         if override_unlabeled_targets:
             self._override_unlabeled_target(targets_dict, batch_dict)
+
+        tag = 'rcnn_proposals_metrics'
+        unlabeled_inds = batch_dict['unlabeled_inds']
+        props_metrics = batch_dict[tag]
+        metric_inputs = {'preds': [torch.cat([targets_dict['rois'], targets_dict['roi_labels'].unsqueeze(dim=-1)], dim=-1)[ind] for ind in unlabeled_inds],
+                         'targets': [batch_dict['ori_unlabeled_boxes'][ind] for ind, uind in enumerate(unlabeled_inds)],
+                         'pred_scores': [torch.sigmoid(targets_dict['roi_scores'][ind]) for ind in unlabeled_inds],
+                         'pred_sem_scores': [torch.sigmoid(targets_dict['roi_scores'][ind]) for ind in unlabeled_inds]
+                        }
+        props_metrics.update(**metric_inputs)
 
         batch_size = batch_dict['batch_size']
 
