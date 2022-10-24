@@ -97,6 +97,24 @@ def _max_score_replacement(batch_dict_a, batch_dict_b, unlabeled_inds, score_key
         batch_dict_a[key][unlabeled_inds] = batch_dict_cat[key][unlabeled_inds, ..., max_inds]
 
 
+class MetricRegistry(object):
+    def __init__(self, ):
+        self._tag_metrics = {}
+
+    def get(self, tag=None):
+        if tag is None:
+            tag = 'default'
+        if tag in self._tag_metrics.keys():
+            metric = self._tag_metrics[tag]
+        else:
+            metric = KITTIEVAL()
+            self._tag_metrics[tag] = metric
+        return metric
+
+    def tags(self):
+        return self._tag_metrics.keys()
+
+
 class PVRCNN_SSL(Detector3DTemplate):
     def __init__(self, model_cfg, num_class, dataset):
         super().__init__(model_cfg=model_cfg, num_class=num_class, dataset=dataset)
@@ -121,9 +139,9 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.no_nms = model_cfg.NO_NMS
         self.supervise_mode = model_cfg.SUPERVISE_MODE
 
-        self.metrics = {'before_filtering': KITTIEVAL(),
-                        'after_filtering': KITTIEVAL(),
-                        'rcnn_proposals_metrics': KITTIEVAL()}
+        # TODO(farzad) refactor
+        self.metric_registry = MetricRegistry()
+
     def forward(self, batch_dict):
         if self.training:
             labeled_mask = batch_dict['labeled_mask'].view(-1)
@@ -245,7 +263,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             #                  'pred_sem_scores': pseudo_sem_scores}
             # self.metrics['after_filtering'].update(**metric_inputs)  # commented to reduce complexity.
 
-            batch_dict['rcnn_proposals_metrics'] = self.metrics['rcnn_proposals_metrics']
+            batch_dict['metric_registry'] = self.metric_registry
             batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
             for cur_module in self.pv_rcnn.module_list:
                 if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
@@ -315,13 +333,9 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     tb_dict_[key] = tb_dict[key]
 
-            # metrics_before_filtering = self.compute_metrics(tag='before_filtering')
-            # tb_dict_.update(metrics_before_filtering)
-            # metrics_after_filtering = self.compute_metrics(tag='after_filtering')  # commented to reduce complexity.
-            # tb_dict_.update(metrics_after_filtering)
-
-            metrics_teachers_proposals = self.compute_metrics(tag='rcnn_proposals_metrics')
-            tb_dict_.update(metrics_teachers_proposals)
+            for key in self.metric_registry.tags():
+                metrics = self.compute_metrics(tag=key)
+                tb_dict_.update(metrics)
 
             if dist.is_initialized():
                 rank = os.getenv('RANK')
@@ -344,12 +358,12 @@ class PVRCNN_SSL(Detector3DTemplate):
 
     def compute_metrics(self, tag):
 
-        if self.metrics[tag]._update_count == 37 * 2:  # TODO(farzad) epoch length is hardcoded.
+        if self.metric_registry.get(tag)._update_count == 37 * 2:  # TODO(farzad) epoch length is hardcoded.
             # compute() takes ~45ms for each sample and linearly increasing
             # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
-            results = self.metrics[tag].compute(stats_only=False)
+            results = self.metric_registry.get(tag).compute(stats_only=False)
         else:
-            results = self.metrics[tag].compute()
+            results = self.metric_registry.get(tag).compute()
 
         statistics = {}
 
@@ -361,7 +375,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
         if 'detailed_stats' in results.keys():
             # total_num_samples depends on states. Metric rest() should be called afterward.
-            total_num_samples = max(len(self.metrics[tag].detections), 1)
+            total_num_samples = max(len(self.metric_registry.get(tag).detections), 1)
             detailed_stats = results['detailed_stats']
             for m, metric_name in enumerate(['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
                 if metric_name == 'sim' or metric_name == 'thresh':
@@ -415,7 +429,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             statistics['prec_rec_fig'] = prec_rec_fig
 
             # kitti eval stats should be reset after one epoch due to intractability
-            self.metrics[tag].reset()
+            self.metric_registry.get(tag).reset()
 
         other_stats = ['pred_ious', 'pred_accs', 'pred_fgs', 'sem_score_fgs',
                        'sem_score_bgs', 'num_pred_boxes', 'num_gt_boxes']

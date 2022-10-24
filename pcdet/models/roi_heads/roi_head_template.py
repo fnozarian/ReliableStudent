@@ -173,6 +173,38 @@ class RoIHeadTemplate(nn.Module):
             targets_dict['gt_of_rois_var'][unlabeled_inds, :num_rois_ema, :-1] = batch_dict['pred_boxes_ema_var'][
                 unlabeled_inds]
 
+    def update_metrics(self, batch_dict, targets_dict, override_unlabeled_targets, mask_type='reg', pred_type='pl'):
+        metric_registry = batch_dict['metric_registry']
+        tag = f'rcnn_{pred_type}_metrics_{mask_type}'
+        metrics = metric_registry.get(tag)
+        unlabeled_inds = batch_dict['unlabeled_inds']
+
+        preds, targets, pred_scores, pred_sem_scores = [], [], [], []
+        for i, uind in enumerate(unlabeled_inds):
+            mask = (targets_dict['reg_valid_mask'][uind] > 0) if mask_type == 'reg' else (
+                        targets_dict['rcnn_cls_labels'][uind] >= 0)
+            pred_label = targets_dict['roi_labels'][uind][mask].unsqueeze(-1)
+            pred_score = targets_dict['rcnn_cls_labels'][uind][mask].unsqueeze(-1)
+
+            if override_unlabeled_targets:
+                pred_sem_score = targets_dict['roi_scores'][uind][mask].unsqueeze(-1)
+            else:
+                pred_sem_score = torch.sigmoid(targets_dict['roi_scores'])[uind][mask].unsqueeze(-1)
+
+            pred_boxes = targets_dict['gt_of_rois'][uind][mask, :-1] if pred_type == 'pl' else targets_dict['rois'][uind]
+            pred = torch.cat([pred_boxes, pred_label], dim=-1)
+
+            target_boxes = batch_dict['ori_unlabeled_boxes'][i]
+
+            preds.append(pred)
+            targets.append(target_boxes)
+            pred_scores.append(pred_score)
+            pred_sem_scores.append(pred_sem_score)
+
+        metric_inputs = {'preds': preds, 'targets': targets, 'pred_scores': pred_scores,
+                         'pred_sem_scores': pred_sem_scores}
+        metrics.update(**metric_inputs)
+
     def assign_targets(self, batch_dict, override_unlabeled_targets=False):
 
         with torch.no_grad():
@@ -181,15 +213,8 @@ class RoIHeadTemplate(nn.Module):
         if override_unlabeled_targets:
             self._override_unlabeled_target(targets_dict, batch_dict)
 
-        tag = 'rcnn_proposals_metrics'
-        unlabeled_inds = batch_dict['unlabeled_inds']
-        props_metrics = batch_dict[tag]
-        metric_inputs = {'preds': [torch.cat([targets_dict['rois'], targets_dict['roi_labels'].unsqueeze(dim=-1)], dim=-1)[ind] for ind in unlabeled_inds],
-                         'targets': [batch_dict['ori_unlabeled_boxes'][ind] for ind, uind in enumerate(unlabeled_inds)],
-                         'pred_scores': [torch.sigmoid(targets_dict['roi_scores'][ind]) for ind in unlabeled_inds],
-                         'pred_sem_scores': [torch.sigmoid(targets_dict['roi_scores'][ind]) for ind in unlabeled_inds]
-                        }
-        props_metrics.update(**metric_inputs)
+        self.update_metrics(batch_dict, targets_dict, override_unlabeled_targets, mask_type='reg')
+        self.update_metrics(batch_dict, targets_dict, override_unlabeled_targets, mask_type='cls')
 
         batch_size = batch_dict['batch_size']
 
