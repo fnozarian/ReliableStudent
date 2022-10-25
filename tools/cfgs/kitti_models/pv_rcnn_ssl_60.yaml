@@ -192,7 +192,6 @@ MODEL:
             ROI_PER_IMAGE: 128
             FG_RATIO: 0.5
 
-            CONSISTENCY_SAMPLER_TYPE: gt_scores_sampler
             SAMPLE_ROI_BY_EACH_CLASS: True
             CLS_SCORE_TYPE: roi_iou
             CLS_WEIGHT: 0.35
@@ -202,6 +201,9 @@ MODEL:
             HARD_BG_RATIO: 0.8
 
             REG_FG_THRESH: 0.55
+            USE_CONSISTENCY: True
+            UNLABELED_SAMPLER_TYPE: gt_scores_sampler
+            UNLABELED_REG_FG_THRESH: 0.7
 
         LOSS_CONFIG:
             UL_INTERVAL_ROI_IOU_SCORE_TYPE: 'interval-only' # two options: `all` or `interval-only`

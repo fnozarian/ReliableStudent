@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from ...utils import box_coder_utils, common_utils, loss_utils
 from ..model_utils.model_nms_utils import class_agnostic_nms
 from .target_assigner.proposal_target_layer import ProposalTargetLayer
+from .target_assigner.proposal_target_layer_consistency import ProposalTargetLayerConsistency
 
 
 class RoIHeadTemplate(nn.Module):
@@ -16,7 +17,10 @@ class RoIHeadTemplate(nn.Module):
         self.box_coder = getattr(box_coder_utils, self.model_cfg.TARGET_CONFIG.BOX_CODER)(
             **self.model_cfg.TARGET_CONFIG.get('BOX_CODER_CONFIG', {})
         )
-        self.proposal_target_layer = ProposalTargetLayer(roi_sampler_cfg=self.model_cfg.TARGET_CONFIG)
+        if self.model_cfg.TARGET_CONFIG.USE_CONSISTENCY:
+            self.proposal_target_layer = ProposalTargetLayerConsistency(roi_sampler_cfg=self.model_cfg.TARGET_CONFIG)
+        else:
+            self.proposal_target_layer = ProposalTargetLayer(roi_sampler_cfg=self.model_cfg.TARGET_CONFIG)
         self.build_losses(self.model_cfg.LOSS_CONFIG)
         self.forward_ret_dict = None
         self.predict_boxes_when_training = predict_boxes_when_training
@@ -210,8 +214,8 @@ class RoIHeadTemplate(nn.Module):
         with torch.no_grad():
             targets_dict = self.proposal_target_layer.forward(batch_dict)
 
-        if override_unlabeled_targets:
-            self._override_unlabeled_target(targets_dict, batch_dict)
+        # if override_unlabeled_targets:
+        #     self._override_unlabeled_target(targets_dict, batch_dict)
 
         self.update_metrics(batch_dict, targets_dict, override_unlabeled_targets, mask_type='reg')
         self.update_metrics(batch_dict, targets_dict, override_unlabeled_targets, mask_type='cls')
