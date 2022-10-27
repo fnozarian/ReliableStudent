@@ -44,10 +44,10 @@ class KITTIEVAL(Metric):
                 current_classes_int.append(curcls)
         self.current_classes = current_classes_int
         self.min_overlaps = self.min_overlaps[:, :, self.current_classes]
-
-        self.add_state("detections", default=[])
-        self.add_state("groundtruths", default=[])
-        self.add_state("overlaps", default=[])
+        if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
+            self.add_state("detections", default=[])
+            self.add_state("groundtruths", default=[])
+            self.add_state("overlaps", default=[])
         self.add_state("pred_ious", default=torch.tensor((0,)), dist_reduce_fx='cat')
         self.add_state("pred_accs", default=torch.tensor((0,)), dist_reduce_fx='cat')
         self.add_state("pred_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
@@ -125,9 +125,10 @@ class KITTIEVAL(Metric):
                 sem_score_bgs.append(sem_score_bg)
 
             # The following states are accumulated over updates
-            self.detections.append(valid_pred_boxes)
-            self.groundtruths.append(valid_gt_boxes)
-            self.overlaps.append(overlap)
+            if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
+                self.detections.append(valid_pred_boxes)
+                self.groundtruths.append(valid_gt_boxes)
+                self.overlaps.append(overlap)
 
         # The following states are reset on every update (per-batch states)
         self.pred_ious = torch.tensor(pred_ious).cuda().mean()
@@ -144,7 +145,7 @@ class KITTIEVAL(Metric):
                    'sem_score_bgs': self.sem_score_bgs.mean(), 'num_pred_boxes': self.num_pred_boxes.mean(),
                    'num_gt_boxes': self.num_gt_boxes.mean()}
 
-        if not stats_only:
+        if not stats_only and cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
             kitti_eval_metrics = eval_class(self.groundtruths, self.detections, self.current_classes,
                                  self.metric, self.min_overlaps, self.overlaps)
             mAP_3d = get_mAP(kitti_eval_metrics["precision"])
