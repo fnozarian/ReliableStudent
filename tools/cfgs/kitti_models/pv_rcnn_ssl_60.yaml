@@ -224,7 +224,7 @@ MODEL:
         OUTPUT_RAW_SCORE: False
 
         EVAL_METRIC: kitti
-
+        ENABLE_KITTI_EVAL: False
         NMS_CONFIG:
             MULTI_CLASSES_NMS: False
             NMS_TYPE: nms_gpu
