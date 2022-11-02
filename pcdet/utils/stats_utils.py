@@ -53,6 +53,8 @@ class KITTIEVAL(Metric):
         self.add_state("pred_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
         self.add_state("sem_score_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
         self.add_state("sem_score_bgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("score_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        self.add_state("score_bgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
         self.add_state("num_pred_boxes", default=torch.tensor((0,)), dist_reduce_fx='cat')
         self.add_state("num_gt_boxes", default=torch.tensor((0,)), dist_reduce_fx='cat')
 
@@ -71,6 +73,7 @@ class KITTIEVAL(Metric):
         sem_score_bgs = []
         num_pred_boxes = []
         num_gt_boxes = []
+        score_fgs, score_bgs = [], []
         for i in range(len(preds)):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
             valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
@@ -121,8 +124,15 @@ class KITTIEVAL(Metric):
                 sem_score_bg = (valid_sem_scores.squeeze() * (preds_iou_max < bg_thresh).float()).sum() \
                                / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
 
+                score_fg = (valid_pred_scores.squeeze() * (preds_iou_max > fg_thresh).float()).sum() / (
+                            preds_iou_max > fg_thresh).sum()
+                score_bg = (valid_pred_scores.squeeze() * (preds_iou_max < bg_thresh).float()).sum() \
+                               / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
+
                 sem_score_fgs.append(sem_score_fg)
                 sem_score_bgs.append(sem_score_bg)
+                score_fgs.append(score_fg)
+                score_bgs.append(score_bg)
 
             # The following states are accumulated over updates
             if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
@@ -136,6 +146,8 @@ class KITTIEVAL(Metric):
         self.pred_fgs = torch.tensor(pred_fgs).cuda().mean()
         self.sem_score_fgs = torch.tensor(sem_score_fgs).cuda().mean()
         self.sem_score_bgs = torch.tensor(sem_score_bgs).cuda().mean()
+        self.score_fgs = torch.tensor(score_fgs).cuda().mean()
+        self.score_bgs = torch.tensor(score_bgs).cuda().mean()
         self.num_pred_boxes = torch.tensor(num_pred_boxes).cuda().float().mean()
         self.num_gt_boxes = torch.tensor(num_gt_boxes).cuda().float().mean()
 
@@ -143,7 +155,9 @@ class KITTIEVAL(Metric):
         results = {'pred_ious': self.pred_ious.mean(), 'pred_accs': self.pred_accs.mean(),
                    'pred_fgs': self.pred_fgs.mean(), 'sem_score_fgs': self.sem_score_fgs.mean(),
                    'sem_score_bgs': self.sem_score_bgs.mean(), 'num_pred_boxes': self.num_pred_boxes.mean(),
-                   'num_gt_boxes': self.num_gt_boxes.mean()}
+                   'num_gt_boxes': self.num_gt_boxes.mean(),
+                   'score_fgs': self.score_fgs.mean(),
+                   'score_bgs': self.score_bgs.mean()}
 
         if not stats_only and cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
             kitti_eval_metrics = eval_class(self.groundtruths, self.detections, self.current_classes,

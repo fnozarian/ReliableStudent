@@ -432,7 +432,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             self.metric_registry.get(tag).reset()
 
         other_stats = ['pred_ious', 'pred_accs', 'pred_fgs', 'sem_score_fgs',
-                       'sem_score_bgs', 'num_pred_boxes', 'num_gt_boxes']
+                       'sem_score_bgs', 'num_pred_boxes', 'num_gt_boxes', 'score_fgs', 'score_bgs']
         for m, metric_name in enumerate(other_stats):
             if metric_name in results.keys():
                 statistics[metric_name] = results[metric_name]

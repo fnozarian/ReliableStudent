@@ -195,7 +195,7 @@ class RoIHeadTemplate(nn.Module):
             else:
                 pred_sem_score = torch.sigmoid(targets_dict['roi_scores'])[uind][mask].unsqueeze(-1)
 
-            pred_boxes = targets_dict['gt_of_rois'][uind][mask, :-1] if pred_type == 'pl' else targets_dict['rois'][uind]
+            pred_boxes = targets_dict['gt_of_rois'][uind][mask, :-1] if pred_type == 'pl' else targets_dict['rois'][uind][mask]
             pred = torch.cat([pred_boxes, pred_label], dim=-1)
 
             target_boxes = batch_dict['ori_unlabeled_boxes'][i]

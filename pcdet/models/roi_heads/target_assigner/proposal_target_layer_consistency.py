@@ -111,8 +111,32 @@ class ProposalTargetLayerConsistency(nn.Module):
         raise NotImplementedError
 
     # Confidence-based samplers ========================================================================================
-    def classwise_hybrid_thresholds_sampler(self, **kwargs):
-        raise NotImplementedError
+    def classwise_hybrid_thresholds_sampler(self, batch_dict, index):
+        # (mis?) using pseudo-label objectness scores as a proxy for iou!
+
+        gt_scores = batch_dict['pred_scores_ema'][index]
+        gt_boxes = batch_dict['gt_boxes'][index]
+
+        thresh_inds = (batch_dict['roi_scores_ema'][index] > 0.2).nonzero().view(-1)
+        gt_scores = gt_scores[thresh_inds]
+        sampled_inds = self.subsample_rois(max_overlaps=gt_scores)
+        selected_inds = thresh_inds[sampled_inds]
+        sampled_gt_scores = gt_scores[selected_inds]
+        sampled_gt_boxes = gt_boxes[selected_inds]
+        reg_valid_mask = (sampled_gt_scores > self.roi_sampler_cfg.UNLABELED_REG_FG_THRESH).long()
+
+        iou_bg_thresh = self.roi_sampler_cfg.CLS_BG_THRESH
+        iou_fg_thresh = self.roi_sampler_cfg.CLS_FG_THRESH
+        fg_mask = sampled_gt_scores > iou_fg_thresh
+        bg_mask = sampled_gt_scores < iou_bg_thresh
+        interval_mask = (fg_mask == 0) & (bg_mask == 0)
+        cls_labels = (fg_mask > 0).float()
+        cls_labels[interval_mask] = sampled_gt_scores[interval_mask]
+        # Ignoring all-zero pseudo-labels produced due to filtering
+        ignore_mask = torch.eq(sampled_gt_boxes, 0).all(dim=-1)
+        cls_labels[ignore_mask] = -1
+
+        return selected_inds, reg_valid_mask, cls_labels
 
     def classwise_adapative_thresholds_sampler(self, **kwargs):
         raise NotImplementedError
