@@ -358,7 +358,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
     def compute_metrics(self, tag):
 
-        if self.metric_registry.get(tag)._update_count == 37 * 2:  # TODO(farzad) epoch length is hardcoded.
+        if self.metric_registry.get(tag)._update_count == 37 * 10:  # TODO(farzad) epoch length is hardcoded.
             # compute() takes ~45ms for each sample and linearly increasing
             # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
             results = self.metric_registry.get(tag).compute(stats_only=False)
@@ -386,9 +386,15 @@ class PVRCNN_SSL(Detector3DTemplate):
                     metric_value = np.nanmax(detailed_stats[c, 0, :, m])
                     if not np.isnan(metric_value):
                         # class_metrics_all[cls_name] = metric_value  # commented to reduce complexity.
-                        class_metrics_batch[cls_name] = metric_value / total_num_samples
+                        if metric_name in ['tps', 'fps', 'fns']:
+                            class_metrics_batch[cls_name] = metric_value / total_num_samples
+                        elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
+                            class_metrics_batch[cls_name] = metric_value
                 # statistics['all_' + metric_name] = class_metrics_all
-                statistics[metric_name + '_per_sample'] = class_metrics_batch
+                if metric_name in ['tps', 'fps', 'fns']:
+                    statistics[metric_name + '_per_sample'] = class_metrics_batch
+                elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
+                    statistics[metric_name + '_per_tps'] = class_metrics_batch
 
             # Get calculated Precision
             for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
