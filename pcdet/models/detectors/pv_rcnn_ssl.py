@@ -377,6 +377,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             # total_num_samples depends on states. Metric rest() should be called afterward.
             total_num_samples = max(len(self.metric_registry.get(tag).detections), 1)
             detailed_stats = results['detailed_stats']
+            raw_metrics_classwise = {}
             for m, metric_name in enumerate(['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
                 if metric_name == 'sim' or metric_name == 'thresh':
                     continue
@@ -385,16 +386,26 @@ class PVRCNN_SSL(Detector3DTemplate):
                 for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
                     metric_value = np.nanmax(detailed_stats[c, 0, :, m])
                     if not np.isnan(metric_value):
-                        # class_metrics_all[cls_name] = metric_value  # commented to reduce complexity.
+                        class_metrics_all[cls_name] = metric_value
                         if metric_name in ['tps', 'fps', 'fns']:
                             class_metrics_batch[cls_name] = metric_value / total_num_samples
                         elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
                             class_metrics_batch[cls_name] = metric_value
-                # statistics['all_' + metric_name] = class_metrics_all
+                raw_metrics_classwise[metric_name] = class_metrics_all
                 if metric_name in ['tps', 'fps', 'fns']:
                     statistics[metric_name + '_per_sample'] = class_metrics_batch
                 elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
                     statistics[metric_name + '_per_tps'] = class_metrics_batch
+            num_labeled_samples = len(self.dataset.kitti_infos)
+            # TODO(farzad) currently unlabeled data is 10x the labeled data before stats get reset
+            num_unlabeled_samples = num_labeled_samples * 10
+            r = num_unlabeled_samples / num_labeled_samples
+            pr_cls = {}
+            for cls in raw_metrics_classwise['tps'].keys():
+                num_labeled_cls = self.dataset.class_counter[cls]
+                num_unlabeled_cls_tp = raw_metrics_classwise['tps'][cls]
+                pr_cls[cls] = num_unlabeled_cls_tp / (r * num_labeled_cls)
+            statistics['PR'] = pr_cls
 
             # Get calculated Precision
             for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
@@ -438,7 +449,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             self.metric_registry.get(tag).reset()
 
         other_stats = ['pred_ious', 'pred_accs', 'pred_fgs', 'sem_score_fgs',
-                       'sem_score_bgs', 'num_pred_boxes', 'num_gt_boxes', 'score_fgs', 'score_bgs']
+                       'sem_score_bgs', 'num_pred_boxes', 'num_gt_boxes', 'score_fgs', 'score_bgs', 'PR']
         for m, metric_name in enumerate(other_stats):
             if metric_name in results.keys():
                 statistics[metric_name] = results[metric_name]

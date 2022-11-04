@@ -9,7 +9,7 @@ from pcdet.datasets.augmentor.augmentor_utils import *
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 from ...utils import box_utils, calibration_kitti, common_utils, object3d_kitti
 from ..dataset import DatasetTemplate
-
+from collections import Counter
 
 class KittiDatasetSSL(DatasetTemplate):
     def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None):
@@ -62,6 +62,11 @@ class KittiDatasetSSL(DatasetTemplate):
             self.kitti_infos = temp
             assert len(self.kitti_infos) == len(self.sample_id_list)
 
+        self.class_counter = Counter()
+        for info in self.kitti_infos:
+            for name in info['annos']['name']:
+                self.class_counter[name] += 1
+        print(self.class_counter)
         if self.logger is not None:
             self.logger.info('Total samples for KITTI dataset: %d' % (len(self.kitti_infos)))
 
