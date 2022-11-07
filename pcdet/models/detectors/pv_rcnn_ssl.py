@@ -6,7 +6,6 @@ import torch
 import torch.nn.functional as F
 from pcdet.datasets.augmentor.augmentor_utils import *
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
-from matplotlib import pyplot as plt
 
 from ...utils import common_utils
 from .detector3d_template import Detector3DTemplate
@@ -98,8 +97,9 @@ def _max_score_replacement(batch_dict_a, batch_dict_b, unlabeled_inds, score_key
 
 
 class MetricRegistry(object):
-    def __init__(self, ):
+    def __init__(self, **kwargs):
         self._tag_metrics = {}
+        self.dataset = kwargs.get('dataset', None)
 
     def get(self, tag=None):
         if tag is None:
@@ -107,7 +107,7 @@ class MetricRegistry(object):
         if tag in self._tag_metrics.keys():
             metric = self._tag_metrics[tag]
         else:
-            metric = KITTIEVAL()
+            metric = KITTIEVAL(tag=tag, dataset=self.dataset)
             self._tag_metrics[tag] = metric
         return metric
 
@@ -139,8 +139,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.no_nms = model_cfg.NO_NMS
         self.supervise_mode = model_cfg.SUPERVISE_MODE
 
-        # TODO(farzad) refactor
-        self.metric_registry = MetricRegistry()
+        self.metric_registry = MetricRegistry(dataset=self.dataset)
 
     def forward(self, batch_dict):
         if self.training:
@@ -354,116 +353,23 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             pred_dicts, recall_dicts = self.pv_rcnn.post_processing(batch_dict)
 
+            pseudo_boxes_list = [torch.cat([pred_dict['pred_boxes'], pred_dict['pred_labels'].unsqueeze(-1)], dim=-1)
+                                 for pred_dict in pred_dicts]
+            pseudo_scores = [pred_dict['pred_scores'] for pred_dict in pred_dicts]
+            metric_inputs = {'preds': pseudo_boxes_list,
+                             'targets': batch_dict['gt_boxes'],
+                             'pred_scores': pseudo_scores,
+                             'pred_sem_scores': pseudo_scores}
+            self.metric_registry.get('test').update(**metric_inputs)
+
             return pred_dicts, recall_dicts, {}
 
     def compute_metrics(self, tag):
-
-        if self.metric_registry.get(tag)._update_count == 37 * 10:  # TODO(farzad) epoch length is hardcoded.
-            # compute() takes ~45ms for each sample and linearly increasing
-            # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
-            results = self.metric_registry.get(tag).compute(stats_only=False)
-        else:
-            results = self.metric_registry.get(tag).compute()
-
-        statistics = {}
-
-        # Get calculated TPs, FPs, FNs
-        # Early results might not be correct as the 41 values are initialized with zero
-        # and only a few predictions are available and thus a few thresholds are non-zero.
-        # Therefore, mean over several zero values results in low final value.
-        # detailed_stats shape (3, 1, 41, 5) where last dim is
-        # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
-        if 'detailed_stats' in results.keys():
-            # total_num_samples depends on states. Metric rest() should be called afterward.
-            total_num_samples = max(len(self.metric_registry.get(tag).detections), 1)
-            detailed_stats = results['detailed_stats']
-            raw_metrics_classwise = {}
-            for m, metric_name in enumerate(['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
-                if metric_name == 'sim' or metric_name == 'thresh':
-                    continue
-                class_metrics_all = {}
-                class_metrics_batch = {}
-                for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                    metric_value = np.nanmax(detailed_stats[c, 0, :, m])
-                    if not np.isnan(metric_value):
-                        class_metrics_all[cls_name] = metric_value
-                        if metric_name in ['tps', 'fps', 'fns']:
-                            class_metrics_batch[cls_name] = metric_value / total_num_samples
-                        elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
-                            class_metrics_batch[cls_name] = metric_value
-                raw_metrics_classwise[metric_name] = class_metrics_all
-                if metric_name in ['tps', 'fps', 'fns']:
-                    statistics[metric_name + '_per_sample'] = class_metrics_batch
-                elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
-                    statistics[metric_name + '_per_tps'] = class_metrics_batch
-            num_labeled_samples = len(self.dataset.kitti_infos)
-            # TODO(farzad) currently unlabeled data is 10x the labeled data before stats get reset
-            num_unlabeled_samples = num_labeled_samples * 10
-            r = num_unlabeled_samples / num_labeled_samples
-            pr_cls = {}
-            for cls in raw_metrics_classwise['tps'].keys():
-                num_labeled_cls = self.dataset.class_counter[cls]
-                num_unlabeled_cls_tp = raw_metrics_classwise['tps'][cls]
-                pr_cls[cls] = num_unlabeled_cls_tp / (r * num_labeled_cls)
-            statistics['PR'] = pr_cls
-
-            # Get calculated Precision
-            for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
-                class_metrics_all = {}
-                for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                    metric_value = results[metric_name][c].item()
-                    if not np.isnan(metric_value):
-                        class_metrics_all[cls_name] = metric_value
-                statistics[metric_name] = class_metrics_all
-
-            # Get calculated recall
-            class_metrics_all = {}
-            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                metric_value = np.nanmax(results['raw_recall'][c])
-                if not np.isnan(metric_value):
-                    class_metrics_all[cls_name] = metric_value
-            statistics['max_recall'] = class_metrics_all
-
-            # Draw Precision-Recall curves
-            fig, axs = plt.subplots(1, 3, figsize=(12, 4), gridspec_kw={'wspace': 0.5})
-            # plt.tight_layout()
-            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                thresholds = results['detailed_stats'][c, 0, ::-1, 4]
-                prec = results['raw_precision'][c, 0, ::-1]
-                rec = results['raw_recall'][c, 0, ::-1]
-                valid_mask = ~((rec == 0) | (prec == 0))
-
-                ax_c = axs[c]
-                ax_c_twin = ax_c.twinx()
-                ax_c.plot(thresholds[valid_mask], prec[valid_mask], 'b-')
-                ax_c_twin.plot(thresholds[valid_mask], rec[valid_mask], 'r-')
-                ax_c.set_title(cls_name)
-                ax_c.set_xlabel('Foreground score')
-                ax_c.set_ylabel('Precision', color='b')
-                ax_c_twin.set_ylabel('Recall', color='r')
-
-            prec_rec_fig = fig.get_figure()
-            statistics['prec_rec_fig'] = prec_rec_fig
-
-            # kitti eval stats should be reset after one epoch due to intractability
-            self.metric_registry.get(tag).reset()
-
-        other_stats = ['pred_ious', 'pred_accs', 'pred_fgs', 'sem_score_fgs',
-                       'sem_score_bgs', 'num_pred_boxes', 'num_gt_boxes', 'score_fgs', 'score_bgs', 'PR']
-        for m, metric_name in enumerate(other_stats):
-            if metric_name in results.keys():
-                statistics[metric_name] = results[metric_name]
-
-        for key, val in statistics.items():
-            if isinstance(val, list):
-                statistics[key] = np.nanmean(val)
+        results = self.metric_registry.get(tag).compute()
         tag = tag + "/" if tag else ''
+        metrics = {tag + key: val for key, val in results.items()}
 
-        ret_stats = {}
-        for key, val in statistics.items():
-            ret_stats[tag + key] = val
-
-        return ret_stats
+        return metrics
 
     def ensemble_post_processing(self, batch_dict_a, batch_dict_b, unlabeled_inds, ensemble_option=None):
         # TODO(farzad) what about roi_labels and roi_scores in following options?

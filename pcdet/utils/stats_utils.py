@@ -14,7 +14,7 @@ import numpy as np
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 import math
 from pcdet.config import cfg
-
+from matplotlib import pyplot as plt
 
 # TODO(farzad): Pass only scores and labels?
 #               Calculate overlap inside update or compute?
@@ -25,6 +25,9 @@ class KITTIEVAL(Metric):
     full_state_update: bool = False
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.reset_state_interval = kwargs.get('reset_state_interval', 256)
+        self.tag = kwargs.get('tag', None)
+        self.dataset = kwargs.get('dataset', None)
         # TODO(farzad): Move some of these to init args
         current_classes = ['Car', 'Pedestrian', 'Cyclist']
         self.metric = 2  # evaluation only for 3D metric (2)
@@ -44,19 +47,19 @@ class KITTIEVAL(Metric):
                 current_classes_int.append(curcls)
         self.current_classes = current_classes_int
         self.min_overlaps = self.min_overlaps[:, :, self.current_classes]
-        if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
-            self.add_state("detections", default=[])
-            self.add_state("groundtruths", default=[])
-            self.add_state("overlaps", default=[])
-        self.add_state("pred_ious", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("pred_accs", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("pred_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("sem_score_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("sem_score_bgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("score_fgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("score_bgs", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("num_pred_boxes", default=torch.tensor((0,)), dist_reduce_fx='cat')
-        self.add_state("num_gt_boxes", default=torch.tensor((0,)), dist_reduce_fx='cat')
+        # if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
+        self.add_state("detections", default=[])
+        self.add_state("groundtruths", default=[])
+        self.add_state("overlaps", default=[])
+        self.add_state("pred_ious", default=[], dist_reduce_fx='cat')
+        self.add_state("pred_accs", default=[], dist_reduce_fx='cat')
+        self.add_state("pred_fgs", default=[], dist_reduce_fx='cat')
+        self.add_state("sem_score_fgs", default=[], dist_reduce_fx='cat')
+        self.add_state("sem_score_bgs", default=[], dist_reduce_fx='cat')
+        self.add_state("score_fgs", default=[], dist_reduce_fx='cat')
+        self.add_state("score_bgs", default=[], dist_reduce_fx='cat')
+        self.add_state("num_pred_boxes", default=[], dist_reduce_fx='cat')
+        self.add_state("num_gt_boxes", default=[], dist_reduce_fx='cat')
 
     def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor], pred_sem_scores: [torch.Tensor]) -> None:
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
@@ -66,14 +69,7 @@ class KITTIEVAL(Metric):
         targets = [gt_box.clone().detach() for gt_box in targets]
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
         pred_sem_scores = [score.clone().detach() for score in pred_sem_scores]
-        pred_ious = []
-        pred_accs = []
-        pred_fgs = []
-        sem_score_fgs = []
-        sem_score_bgs = []
-        num_pred_boxes = []
-        num_gt_boxes = []
-        score_fgs, score_bgs = [], []
+
         for i in range(len(preds)):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
             valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
@@ -96,78 +92,197 @@ class KITTIEVAL(Metric):
 
             num_gts = valid_gts_mask.sum()
             num_preds = valid_preds_mask.sum()
-            num_pred_boxes.append(num_preds)
-            num_gt_boxes.append(num_gts)
             overlap = valid_gts_mask.new_zeros((num_preds, num_gts))
             if num_gts > 0 and num_preds > 0:
-                # TODO(farzad) IoU computation in CPU might be faster due to smaller preds_x_gts matrix
                 overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
                 preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
-                pred_ious.append(preds_iou_max.mean())
                 pred_labels = valid_pred_boxes[:, -2]
-                acc = (pred_labels == valid_gt_boxes[assigned_gt_inds, -1]).float().mean()
-                pred_accs.append(acc)
-
                 # Using kitti test class-wise fg threshold instead of thresholds used during train.
                 classwise_fg_thresh = self.min_overlaps[0, self.metric]
                 classwise_fg_thresh = pred_labels.new_tensor(classwise_fg_thresh).unsqueeze(dim=0).repeat(pred_labels.shape[0], 1)
                 fg_thresh = classwise_fg_thresh.gather(dim=-1, index=pred_labels.unsqueeze(dim=-1).long()).squeeze()
-
                 bg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
+                fg_mask = preds_iou_max > fg_thresh
+                bg_maks = preds_iou_max < bg_thresh
+                num_classes = len(self.dataset.class_names)
+                classwise_num_pred_boxes = pred_labels.new_zeros(num_classes + 1)
+                classwise_num_gt_boxes = pred_labels.new_zeros(num_classes + 1)
+                classwise_preds_iou = pred_labels.new_zeros(num_classes + 1)
+                classwise_acc = pred_labels.new_zeros(num_classes + 1)
+                classwise_fg = pred_labels.new_zeros(num_classes + 1)
+                classwise_sem_score_fg = pred_labels.new_zeros(num_classes + 1)
+                classwise_sem_score_bg = pred_labels.new_zeros(num_classes + 1)
+                classwise_score_fg = pred_labels.new_zeros(num_classes + 1)
+                classwise_score_bg = pred_labels.new_zeros(num_classes + 1)
+                pred_cls_agnostic_mask = pred_labels.new_ones(pred_labels.shape[0], dtype=torch.bool)
+                gt_cls_agnostic_mask = valid_gt_boxes.new_ones(valid_gt_boxes.shape[0], dtype=torch.bool)
+                assigned_gt_cls_agnostic_mask = valid_gt_boxes.new_ones(assigned_gt_inds.shape[0], dtype=torch.bool)
+                for cind in range(num_classes + 1):
+                    pred_cls_mask = pred_cls_agnostic_mask if cind == num_classes else pred_labels == cind
+                    assigned_gt_cls_mask = assigned_gt_cls_agnostic_mask if cind == num_classes else valid_gt_boxes[assigned_gt_inds, -1] == cind
+                    gt_cls_mask = gt_cls_agnostic_mask if cind == num_classes else valid_gt_boxes[:, -1] == cind
+                    classwise_num_pred_boxes[cind] = pred_cls_mask.sum()
+                    classwise_num_gt_boxes[cind] = gt_cls_mask.sum()
 
-                fg = (preds_iou_max > fg_thresh).float().mean().item()
-                pred_fgs.append(fg)
+                    classwise_preds_iou[cind] = (preds_iou_max * pred_cls_mask.float()).sum() / pred_cls_mask.sum()
 
-                # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
-                # while without clamp it is N/A, which makes more sense.
-                sem_score_fg = (valid_sem_scores.squeeze() * (preds_iou_max > fg_thresh).float()).sum() / (preds_iou_max > fg_thresh).sum()
-                sem_score_bg = (valid_sem_scores.squeeze() * (preds_iou_max < bg_thresh).float()).sum() \
-                               / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
+                    correct_mask = pred_cls_mask & assigned_gt_cls_mask
+                    classwise_acc[cind] = correct_mask.sum() / assigned_gt_cls_mask.sum()
 
-                score_fg = (valid_pred_scores.squeeze() * (preds_iou_max > fg_thresh).float()).sum() / (
-                            preds_iou_max > fg_thresh).sum()
-                score_bg = (valid_pred_scores.squeeze() * (preds_iou_max < bg_thresh).float()).sum() \
-                               / torch.clamp((preds_iou_max < bg_thresh).float().sum(), min=1.0)
+                    cls_fg = fg_mask & pred_cls_mask
+                    cls_fg = cls_fg.sum() / pred_cls_mask.sum()
+                    classwise_fg[cind] = cls_fg
 
-                sem_score_fgs.append(sem_score_fg)
-                sem_score_bgs.append(sem_score_bg)
-                score_fgs.append(score_fg)
-                score_bgs.append(score_bg)
+                    # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
+                    # while without clamp it is N/A, which makes more sense.
+                    cls_sem_score_fg = (valid_sem_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
+                                   / (fg_mask & pred_cls_mask).sum()
+                    cls_sem_score_bg = (valid_sem_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
+                                   / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
+                    cls_score_fg = (valid_pred_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
+                               / (fg_mask & pred_cls_mask).sum()
+                    cls_score_bg = (valid_pred_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
+                               / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
+                    classwise_sem_score_fg[cind] = cls_sem_score_fg
+                    classwise_sem_score_bg[cind] = cls_sem_score_bg
+                    classwise_score_fg[cind] = cls_score_fg
+                    classwise_score_bg[cind] = cls_score_bg
 
-            # The following states are accumulated over updates
-            if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
-                self.detections.append(valid_pred_boxes)
-                self.groundtruths.append(valid_gt_boxes)
-                self.overlaps.append(overlap)
+                # The following states are accumulated over updates
+                self.pred_ious.append(classwise_preds_iou)
+                self.pred_accs.append(classwise_acc)
+                self.pred_fgs.append(classwise_fg)
+                self.sem_score_fgs.append(classwise_sem_score_fg)
+                self.sem_score_bgs.append(classwise_sem_score_bg)
+                self.score_fgs.append(classwise_score_fg)
+                self.score_bgs.append(classwise_score_bg)
+                self.num_pred_boxes.append(classwise_num_pred_boxes)
+                self.num_gt_boxes.append(classwise_num_gt_boxes)
 
-        # The following states are reset on every update (per-batch states)
-        self.pred_ious = torch.tensor(pred_ious).cuda().mean()
-        self.pred_accs = torch.tensor(pred_accs).cuda().mean()
-        self.pred_fgs = torch.tensor(pred_fgs).cuda().mean()
-        self.sem_score_fgs = torch.tensor(sem_score_fgs).cuda().mean()
-        self.sem_score_bgs = torch.tensor(sem_score_bgs).cuda().mean()
-        self.score_fgs = torch.tensor(score_fgs).cuda().mean()
-        self.score_bgs = torch.tensor(score_bgs).cuda().mean()
-        self.num_pred_boxes = torch.tensor(num_pred_boxes).cuda().float().mean()
-        self.num_gt_boxes = torch.tensor(num_gt_boxes).cuda().float().mean()
+            # if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
+            self.detections.append(valid_pred_boxes)
+            self.groundtruths.append(valid_gt_boxes)
+            self.overlaps.append(overlap)
 
-    def compute(self, stats_only=True):
-        results = {'pred_ious': self.pred_ious.mean(), 'pred_accs': self.pred_accs.mean(),
-                   'pred_fgs': self.pred_fgs.mean(), 'sem_score_fgs': self.sem_score_fgs.mean(),
-                   'sem_score_bgs': self.sem_score_bgs.mean(), 'num_pred_boxes': self.num_pred_boxes.mean(),
-                   'num_gt_boxes': self.num_gt_boxes.mean(),
-                   'score_fgs': self.score_fgs.mean(),
-                   'score_bgs': self.score_bgs.mean()}
-
-        if not stats_only and cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
+    def compute(self):
+        results = {'pred_ious': torch.stack(self.pred_ious, dim=0).nanmean(dim=0),
+                   'pred_accs': torch.stack(self.pred_accs, dim=0).nanmean(dim=0),
+                   'pred_fgs': torch.stack(self.pred_fgs, dim=0).nanmean(dim=0),
+                   'sem_score_fgs': torch.stack(self.sem_score_fgs, dim=0).nanmean(dim=0),
+                   'sem_score_bgs': torch.stack(self.sem_score_bgs, dim=0).nanmean(dim=0),
+                   'num_pred_boxes': torch.stack(self.num_pred_boxes, dim=0).nanmean(dim=0),
+                   'num_gt_boxes': torch.stack(self.num_gt_boxes, dim=0).nanmean(dim=0),
+                   'score_fgs': torch.stack(self.score_fgs, dim=0).nanmean(dim=0),
+                   'score_bgs': torch.stack(self.score_bgs, dim=0).nanmean(dim=0)}
+        final_results = {}
+        for key, val in results.items():
+            classwise_results = {}
+            for cind, cls in enumerate(self.dataset.class_names + ['cls_agnostic']):
+                if not torch.isnan(val[cind]):
+                    classwise_results[cls] = val[cind].item()
+            final_results[key] = classwise_results
+        if (len(self.detections) % self.reset_state_interval == 0) and cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
+            # eval_class() takes ~45ms for each sample and linearly increasing
+            # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
             kitti_eval_metrics = eval_class(self.groundtruths, self.detections, self.current_classes,
                                  self.metric, self.min_overlaps, self.overlaps)
             mAP_3d = get_mAP(kitti_eval_metrics["precision"])
             mAP_3d_R40 = get_mAP_R40(kitti_eval_metrics["precision"])
             kitti_eval_metrics.update({"mAP_3d": mAP_3d, "mAP_3d_R40": mAP_3d_R40})
-            results.update(kitti_eval_metrics)
 
-        return results
+            # Get calculated TPs, FPs, FNs
+            # Early results might not be correct as the 41 values are initialized with zero
+            # and only a few predictions are available and thus a few thresholds are non-zero.
+            # Therefore, mean over several zero values results in low final value.
+            # detailed_stats shape (3, 1, 41, 5) where last dim is
+            # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
+            total_num_samples = max(len(self.detections), 1)
+            detailed_stats = kitti_eval_metrics['detailed_stats']
+            raw_metrics_classwise = {}
+            for m, metric_name in enumerate(
+                    ['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
+                if metric_name == 'sim' or metric_name == 'thresh':
+                    continue
+                class_metrics_all = {}
+                class_metrics_batch = {}
+                for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                    metric_value = np.nanmax(detailed_stats[c, 0, :, m])
+                    if not np.isnan(metric_value):
+                        class_metrics_all[cls_name] = metric_value
+                        if metric_name in ['tps', 'fps', 'fns']:
+                            class_metrics_batch[cls_name] = metric_value / total_num_samples
+                        elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
+                            class_metrics_batch[cls_name] = metric_value
+                raw_metrics_classwise[metric_name] = class_metrics_all
+                if metric_name in ['tps', 'fps', 'fns']:
+                    kitti_eval_metrics[metric_name + '_per_sample'] = class_metrics_batch
+                elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
+                    kitti_eval_metrics[metric_name + '_per_tps'] = class_metrics_batch
+
+            # Get calculated PR
+            num_labeled_samples = len(self.dataset.kitti_infos)
+            num_unlabeled_samples = total_num_samples
+            r = num_unlabeled_samples / num_labeled_samples
+            pr_cls = {}
+            for cls in raw_metrics_classwise['tps'].keys():
+                num_labeled_cls = self.dataset.class_counter[cls]
+                num_unlabeled_cls_tp = raw_metrics_classwise['tps'][cls]
+                pr_cls[cls] = num_unlabeled_cls_tp / (r * num_labeled_cls)
+            kitti_eval_metrics['PR'] = pr_cls
+
+            # Get calculated Precision
+            for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
+                class_metrics_all = {}
+                for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                    metric_value = kitti_eval_metrics[metric_name][c].item()
+                    if not np.isnan(metric_value):
+                        class_metrics_all[cls_name] = metric_value
+                kitti_eval_metrics[metric_name] = class_metrics_all
+
+            # Get calculated recall
+            class_metrics_all = {}
+            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                metric_value = np.nanmax(kitti_eval_metrics['raw_recall'][c])
+                if not np.isnan(metric_value):
+                    class_metrics_all[cls_name] = metric_value
+            kitti_eval_metrics['max_recall'] = class_metrics_all
+
+            # Draw Precision-Recall curves
+            fig, axs = plt.subplots(1, 3, figsize=(12, 4), gridspec_kw={'wspace': 0.5})
+            # plt.tight_layout()
+            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                thresholds = kitti_eval_metrics['detailed_stats'][c, 0, ::-1, 4]
+                prec = kitti_eval_metrics['raw_precision'][c, 0, ::-1]
+                rec = kitti_eval_metrics['raw_recall'][c, 0, ::-1]
+                valid_mask = ~((rec == 0) | (prec == 0))
+
+                ax_c = axs[c]
+                ax_c_twin = ax_c.twinx()
+                ax_c.plot(thresholds[valid_mask], prec[valid_mask], 'b-')
+                ax_c_twin.plot(thresholds[valid_mask], rec[valid_mask], 'r-')
+                ax_c.set_title(cls_name)
+                ax_c.set_xlabel('Foreground score')
+                ax_c.set_ylabel('Precision', color='b')
+                ax_c_twin.set_ylabel('Recall', color='r')
+
+            prec_rec_fig = fig.get_figure()
+            kitti_eval_metrics['prec_rec_fig'] = prec_rec_fig
+
+            kitti_eval_metrics.pop('recall')
+            kitti_eval_metrics.pop('precision')
+            kitti_eval_metrics.pop('raw_recall')
+            kitti_eval_metrics.pop('raw_precision')
+            kitti_eval_metrics.pop('detailed_stats')
+
+            final_results.update(kitti_eval_metrics)
+
+            self.reset()
+
+        for key, val in final_results.items():
+            if isinstance(val, list):
+                final_results[key] = np.nanmean(val)
+
+        return final_results
 
 
 def eval_class(gt_annos,

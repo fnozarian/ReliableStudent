@@ -7,9 +7,28 @@ import time
 from torch.nn.utils import clip_grad_norm_
 from pcdet.utils import common_utils, commu_utils
 from matplotlib import pyplot as plt
+from pcdet.models import load_data_to_gpu
+
+def log_tb_dict(tb_log, tb_dict, accumulated_iter):
+    for key, val in tb_dict.items():
+        if val is None or (isinstance(val, torch.Tensor) and torch.isnan(val)):
+            continue
+        # print(key, val)
+        subkeys = key.split("/")
+        cat, key = (subkeys[0] + "/", subkeys[1]) if len(subkeys) > 1 else ('train/', key)
+        if key in ['bs']:
+            cat = 'meta_data/'
+        if isinstance(val, dict):
+            tb_log.add_scalars(cat + key, val, accumulated_iter)
+        elif isinstance(val, plt.Figure):
+            tb_log.add_figure(cat + key, val, accumulated_iter)
+        else:
+            tb_log.add_scalar(cat + key, val, accumulated_iter)
+
 
 def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, accumulated_iter, optim_cfg,
-                    rank, tbar, total_it_each_epoch, dataloader_iter, tb_log=None, leave_pbar=False):
+                    rank, tbar, total_it_each_epoch, dataloader_iter, tb_log=None, leave_pbar=False,
+                    test_loader=None, dataloader_test_iter=None):
     if total_it_each_epoch == len(train_loader):
         dataloader_iter = iter(train_loader)
 
@@ -27,7 +46,13 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
             dataloader_iter = iter(train_loader)
             batch = next(dataloader_iter)
             print('new iters')
-        
+        try:
+            if dataloader_test_iter:
+                batch_test = next(dataloader_test_iter)
+        except StopIteration:
+            dataloader_test_iter = iter(test_loader)
+            batch_test = next(dataloader_test_iter)
+
         data_timer = time.time()
         cur_data_time = data_timer - end
 
@@ -61,6 +86,12 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
         avg_forward_time = commu_utils.average_reduce_value(cur_forward_time)
         avg_batch_time = commu_utils.average_reduce_value(cur_batch_time)
 
+        if dataloader_test_iter:
+            model.eval()
+            with torch.no_grad():
+                load_data_to_gpu(batch_test)
+                pred_dicts, tb_dict_test, disp_dict_test = model(batch_test)
+
         # log to console and tensorboard
         if rank == 0:
             data_time.update(avg_data_time)
@@ -79,20 +110,9 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
             if tb_log is not None:
                 tb_log.add_scalar('train/loss', loss, accumulated_iter)
                 tb_log.add_scalar('meta_data/learning_rate', cur_lr, accumulated_iter)
-                for key, val in tb_dict.items():
-                    if val is None or (isinstance(val, torch.Tensor) and torch.isnan(val)):
-                        continue
-                    # print(key, val)
-                    subkeys = key.split("/")
-                    cat, key = (subkeys[0] + "/", subkeys[1]) if len(subkeys) > 1 else ('train/', key)
-                    if key in ['bs']:
-                        cat = 'meta_data/'
-                    if isinstance(val, dict):
-                        tb_log.add_scalars(cat + key, val, accumulated_iter)
-                    elif isinstance(val, plt.Figure):
-                        tb_log.add_figure(cat + key, val, accumulated_iter)
-                    else:
-                        tb_log.add_scalar(cat + key, val, accumulated_iter)
+                log_tb_dict(tb_log, tb_dict, accumulated_iter)
+                if dataloader_test_iter:
+                    log_tb_dict(tb_log, tb_dict_test, accumulated_iter)
     if rank == 0:
         pbar.close()
     return accumulated_iter
@@ -101,7 +121,7 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
 def train_model(model, optimizer, train_loader, model_func, lr_scheduler, optim_cfg,
                 start_epoch, total_epochs, start_iter, rank, tb_log, ckpt_save_dir, train_sampler=None,
                 lr_warmup_scheduler=None, ckpt_save_interval=1, max_ckpt_save_num=50,
-                merge_all_iters_to_one_epoch=False):
+                merge_all_iters_to_one_epoch=False, test_loader=None):
     accumulated_iter = start_iter
     with tqdm.trange(start_epoch, total_epochs, desc='epochs', dynamic_ncols=True, leave=(rank == 0)) as tbar:
         total_it_each_epoch = len(train_loader)
@@ -111,6 +131,7 @@ def train_model(model, optimizer, train_loader, model_func, lr_scheduler, optim_
             total_it_each_epoch = len(train_loader) // max(total_epochs, 1)
 
         dataloader_iter = iter(train_loader)
+        dataloader_test_iter = iter(test_loader) if test_loader else None
         for cur_epoch in tbar:
             if train_sampler is not None:
                 train_sampler.set_epoch(cur_epoch)
@@ -127,7 +148,9 @@ def train_model(model, optimizer, train_loader, model_func, lr_scheduler, optim_
                 rank=rank, tbar=tbar, tb_log=tb_log,
                 leave_pbar=(cur_epoch + 1 == total_epochs),
                 total_it_each_epoch=total_it_each_epoch,
-                dataloader_iter=dataloader_iter
+                dataloader_iter=dataloader_iter,
+                test_loader=test_loader,
+                dataloader_test_iter=dataloader_test_iter
             )
 
             # save trained model
