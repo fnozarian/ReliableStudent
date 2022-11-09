@@ -11,7 +11,8 @@ from ...utils import common_utils
 from .detector3d_template import Detector3DTemplate
 from collections import defaultdict
 from.pv_rcnn import PVRCNN
-from ...utils.stats_utils import KITTIEVAL
+from ...utils.stats_utils import KITTIEvalMetrics, PredQualityMetrics
+from torchmetrics.collections import MetricCollection
 import torch.distributed as dist
 
 def _to_dict_of_tensors(list_of_dicts, agg_mode='stack'):
@@ -100,6 +101,7 @@ class MetricRegistry(object):
     def __init__(self, **kwargs):
         self._tag_metrics = {}
         self.dataset = kwargs.get('dataset', None)
+        self.cls_bg_thresh = kwargs.get('cls_bg_thresh', None)
 
     def get(self, tag=None):
         if tag is None:
@@ -107,7 +109,10 @@ class MetricRegistry(object):
         if tag in self._tag_metrics.keys():
             metric = self._tag_metrics[tag]
         else:
-            metric = KITTIEVAL(tag=tag, dataset=self.dataset)
+            kitti_eval_metric = KITTIEvalMetrics(tag=tag, dataset=self.dataset)
+            pred_qual_metric = PredQualityMetrics(tag=tag, dataset=self.dataset, cls_bg_thresh=self.cls_bg_thresh)
+            metric = MetricCollection({"kitti_eval_metric": kitti_eval_metric,
+                                       "pred_quality_metric": pred_qual_metric})
             self._tag_metrics[tag] = metric
         return metric
 
@@ -138,8 +143,8 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.unlabeled_weight = model_cfg.UNLABELED_WEIGHT
         self.no_nms = model_cfg.NO_NMS
         self.supervise_mode = model_cfg.SUPERVISE_MODE
-
-        self.metric_registry = MetricRegistry(dataset=self.dataset)
+        cls_bg_thresh = model_cfg.ROI_HEAD.TARGET_CONFIG.CLS_BG_THRESH
+        self.metric_registry = MetricRegistry(dataset=self.dataset, cls_bg_thresh=cls_bg_thresh)
 
     def forward(self, batch_dict):
         if self.training:

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 import torch.distributed as dist
 
 sys.path.append('/tmp/OpenPCDet/pcdet/utils')
-from stats_utils import KITTIEVAL
+from stats_utils import KITTIEvalMetrics
 
 # from https://github.com/Lightning-AI/metrics/blob/9b19a922487e295810bf5e22a587727964cc8718/tests/unittests/bases/test_ddp.py
 # import pytest
@@ -233,7 +233,7 @@ class MyDataset(torch_data.Dataset):
 class MyTestModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.map_metric = KITTIEVAL()
+        self.map_metric = KITTIEvalMetrics()
 
     def forward(self, pseudo_boxes_list, ori_boxes_list, pseudo_scores, pseudo_sem_scores):
         self.map_metric.update(pseudo_boxes_list, ori_boxes_list, pseudo_scores, pseudo_sem_scores)

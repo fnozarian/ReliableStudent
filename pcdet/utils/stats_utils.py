@@ -21,15 +21,145 @@ from matplotlib import pyplot as plt
 #               Change the states to TP, FP, FN, etc?
 #               Calculate incrementally based on summarized value?
 
-class KITTIEVAL(Metric):
+
+class PredQualityMetrics(Metric):
+    full_state_update: bool = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.reset_state_interval = kwargs.get('reset_state_interval', 32)
+        self.tag = kwargs.get('tag', None)
+        self.dataset = kwargs.get('dataset', None)
+        self.cls_bg_thresh = kwargs.get('cls_bg_thresh', None)
+        self.metrics_name = ["pred_ious", "pred_accs", "pred_fgs", "sem_score_fgs", "sem_score_bgs",
+                             "score_fgs", "score_bgs", "num_pred_boxes", "num_gt_boxes"]
+        self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
+
+        for metric_name in self.metrics_name:
+            self.add_state(metric_name, default=[], dist_reduce_fx='cat')
+
+    def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor],
+               pred_sem_scores: [torch.Tensor]) -> None:
+        assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
+        assert len(pred_scores) == len(pred_sem_scores)
+        preds = [pred_box.clone().detach() for pred_box in preds]
+        targets = [gt_box.clone().detach() for gt_box in targets]
+        pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
+        pred_sem_scores = [score.clone().detach() for score in pred_sem_scores]
+
+        sample_tensor = preds[0] if len(preds) else targets[0]
+        num_classes = len(self.dataset.class_names)
+        for i in range(len(preds)):
+            valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
+            valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
+            if pred_scores[i].ndim == 1:
+                pred_scores[i] = pred_scores[i].unsqueeze(dim=-1)
+            if pred_sem_scores[i].ndim == 1:
+                pred_sem_scores[i] = pred_sem_scores[i].unsqueeze(dim=-1)
+
+            valid_pred_boxes = preds[i][valid_preds_mask]
+            valid_gt_boxes = targets[i][valid_gts_mask]
+            valid_pred_scores = pred_scores[i][valid_preds_mask.nonzero().view(-1)]
+            valid_sem_scores = pred_sem_scores[i][valid_preds_mask.nonzero().view(-1)]
+
+            # Starting class indices from zero
+            valid_pred_boxes[:, -1] -= 1
+            valid_gt_boxes[:, -1] -= 1
+
+            # Adding predicted scores as the last column
+            valid_pred_boxes = torch.cat([valid_pred_boxes, valid_pred_scores], dim=-1)
+
+            pred_labels = valid_pred_boxes[:, -2]
+
+            num_gts = valid_gts_mask.sum()
+            num_preds = valid_preds_mask.sum()
+            pred_cls_agnostic_mask = pred_labels.new_ones(pred_labels.shape[0], dtype=torch.bool)
+            gt_cls_agnostic_mask = valid_gt_boxes.new_ones(valid_gt_boxes.shape[0], dtype=torch.bool)
+
+            classwise_metrics = {}
+            for metric_name in self.metrics_name:
+                classwise_metrics[metric_name] = sample_tensor.new_zeros(num_classes + 1).fill_(torch.nan)
+
+            for cind in range(num_classes + 1):
+                pred_cls_mask = pred_cls_agnostic_mask if cind == num_classes else pred_labels == cind
+                gt_cls_mask = gt_cls_agnostic_mask if cind == num_classes else valid_gt_boxes[:, -1] == cind
+                classwise_metrics['num_pred_boxes'][cind] = pred_cls_mask.sum()
+                classwise_metrics['num_gt_boxes'][cind] = gt_cls_mask.sum()
+
+                if num_gts > 0 and num_preds > 0:
+                    overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
+                    preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
+                    classwise_metrics['pred_ious'][cind] = (preds_iou_max * pred_cls_mask.float()).sum() / pred_cls_mask.sum()
+
+                    # Using kitti test class-wise fg threshold instead of thresholds used during train.
+                    classwise_fg_thresh = pred_labels.new_tensor(self.min_overlaps).unsqueeze(dim=0).repeat(pred_labels.shape[0], 1)
+                    fg_thresh = classwise_fg_thresh.gather(dim=-1, index=pred_labels.unsqueeze(dim=-1).long()).squeeze()
+                    fg_mask = preds_iou_max > fg_thresh
+                    classwise_metrics['pred_fgs'][cind] = (fg_mask & pred_cls_mask).sum() / pred_cls_mask.sum()
+
+                    assigned_gt_cls_agnostic_mask = valid_gt_boxes.new_ones(assigned_gt_inds.shape[0], dtype=torch.bool)
+                    assigned_gt_cls_mask = assigned_gt_cls_agnostic_mask if cind == num_classes else valid_gt_boxes[assigned_gt_inds, -1] == cind
+                    correct_mask = pred_cls_mask & assigned_gt_cls_mask
+                    classwise_metrics['pred_accs'][cind] = correct_mask.sum() / assigned_gt_cls_mask.sum()
+
+                    # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
+                    # while without clamp it is N/A, which makes more sense.
+
+                    cls_sem_score_fg = (valid_sem_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
+                                       / (fg_mask & pred_cls_mask).sum()
+                    classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
+
+                    bg_maks = preds_iou_max < self.cls_bg_thresh
+                    cls_sem_score_bg = (valid_sem_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
+                                       / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
+                    classwise_metrics['sem_score_bgs'][cind] = cls_sem_score_bg
+
+                    cls_score_bg = (valid_pred_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
+                                   / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
+                    classwise_metrics['score_bgs'][cind] = cls_score_bg
+
+                    cls_score_fg = (valid_pred_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
+                                   / (fg_mask & pred_cls_mask).sum()
+                    classwise_metrics['score_fgs'][cind] = cls_score_fg
+
+            for key, val in classwise_metrics.items():
+                getattr(self, key).append(val)
+
+        # If no prediction is given all states are filled with nan tensors
+        if len(preds) == 0:
+            for metric_name in self.metrics_name:
+                getattr(self, metric_name).append(sample_tensor.new_zeros(num_classes + 1).fill_(torch.nan))
+
+    def compute(self):
+        final_results = {}
+        if len(self.pred_ious) % self.reset_state_interval == 0:
+            results = {}
+            for mname in self.metrics_name:
+                mstate = getattr(self, mname)
+                results[mname] = torch.stack(mstate, dim=0).nanmean(dim=0)
+
+            for key, val in results.items():
+                classwise_results = {}
+                for cind, cls in enumerate(self.dataset.class_names + ['cls_agnostic']):
+                    if not torch.isnan(val[cind]):
+                        classwise_results[cls] = val[cind].item()
+                final_results[key] = classwise_results
+
+            # TODO(farzad) Does calling reset in compute make a trouble?
+            self.reset()
+
+        return final_results
+
+
+# TODO(farzad) This class should later be derived from PredQualityMetrics to avoid repeating the code and computation
+class KITTIEvalMetrics(Metric):
     full_state_update: bool = False
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.reset_state_interval = kwargs.get('reset_state_interval', 256)
         self.tag = kwargs.get('tag', None)
         self.dataset = kwargs.get('dataset', None)
-        # TODO(farzad): Move some of these to init args
-        current_classes = ['Car', 'Pedestrian', 'Cyclist']
+        current_classes = self.dataset.class_names
         self.metric = 2  # evaluation only for 3D metric (2)
         overlap_0_7 = np.array([[0.7, 0.5, 0.5, 0.7, 0.5, 0.7],
                                 [0.7, 0.5, 0.5, 0.7, 0.5, 0.7],
@@ -51,20 +181,10 @@ class KITTIEVAL(Metric):
         self.add_state("detections", default=[])
         self.add_state("groundtruths", default=[])
         self.add_state("overlaps", default=[])
-        self.add_state("pred_ious", default=[], dist_reduce_fx='cat')
-        self.add_state("pred_accs", default=[], dist_reduce_fx='cat')
-        self.add_state("pred_fgs", default=[], dist_reduce_fx='cat')
-        self.add_state("sem_score_fgs", default=[], dist_reduce_fx='cat')
-        self.add_state("sem_score_bgs", default=[], dist_reduce_fx='cat')
-        self.add_state("score_fgs", default=[], dist_reduce_fx='cat')
-        self.add_state("score_bgs", default=[], dist_reduce_fx='cat')
-        self.add_state("num_pred_boxes", default=[], dist_reduce_fx='cat')
-        self.add_state("num_gt_boxes", default=[], dist_reduce_fx='cat')
 
     def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor], pred_sem_scores: [torch.Tensor]) -> None:
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
         assert len(pred_scores) == len(pred_sem_scores)
-        # TODO(farzad) should we clone and detach? if so, then profile memory consumption.
         preds = [pred_box.clone().detach() for pred_box in preds]
         targets = [gt_box.clone().detach() for gt_box in targets]
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
@@ -95,69 +215,6 @@ class KITTIEVAL(Metric):
             overlap = valid_gts_mask.new_zeros((num_preds, num_gts))
             if num_gts > 0 and num_preds > 0:
                 overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
-                preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
-                pred_labels = valid_pred_boxes[:, -2]
-                # Using kitti test class-wise fg threshold instead of thresholds used during train.
-                classwise_fg_thresh = self.min_overlaps[0, self.metric]
-                classwise_fg_thresh = pred_labels.new_tensor(classwise_fg_thresh).unsqueeze(dim=0).repeat(pred_labels.shape[0], 1)
-                fg_thresh = classwise_fg_thresh.gather(dim=-1, index=pred_labels.unsqueeze(dim=-1).long()).squeeze()
-                bg_thresh = cfg['MODEL']['ROI_HEAD']['TARGET_CONFIG']['CLS_BG_THRESH']
-                fg_mask = preds_iou_max > fg_thresh
-                bg_maks = preds_iou_max < bg_thresh
-                num_classes = len(self.dataset.class_names)
-                classwise_num_pred_boxes = pred_labels.new_zeros(num_classes + 1)
-                classwise_num_gt_boxes = pred_labels.new_zeros(num_classes + 1)
-                classwise_preds_iou = pred_labels.new_zeros(num_classes + 1)
-                classwise_acc = pred_labels.new_zeros(num_classes + 1)
-                classwise_fg = pred_labels.new_zeros(num_classes + 1)
-                classwise_sem_score_fg = pred_labels.new_zeros(num_classes + 1)
-                classwise_sem_score_bg = pred_labels.new_zeros(num_classes + 1)
-                classwise_score_fg = pred_labels.new_zeros(num_classes + 1)
-                classwise_score_bg = pred_labels.new_zeros(num_classes + 1)
-                pred_cls_agnostic_mask = pred_labels.new_ones(pred_labels.shape[0], dtype=torch.bool)
-                gt_cls_agnostic_mask = valid_gt_boxes.new_ones(valid_gt_boxes.shape[0], dtype=torch.bool)
-                assigned_gt_cls_agnostic_mask = valid_gt_boxes.new_ones(assigned_gt_inds.shape[0], dtype=torch.bool)
-                for cind in range(num_classes + 1):
-                    pred_cls_mask = pred_cls_agnostic_mask if cind == num_classes else pred_labels == cind
-                    assigned_gt_cls_mask = assigned_gt_cls_agnostic_mask if cind == num_classes else valid_gt_boxes[assigned_gt_inds, -1] == cind
-                    gt_cls_mask = gt_cls_agnostic_mask if cind == num_classes else valid_gt_boxes[:, -1] == cind
-                    classwise_num_pred_boxes[cind] = pred_cls_mask.sum()
-                    classwise_num_gt_boxes[cind] = gt_cls_mask.sum()
-
-                    classwise_preds_iou[cind] = (preds_iou_max * pred_cls_mask.float()).sum() / pred_cls_mask.sum()
-
-                    correct_mask = pred_cls_mask & assigned_gt_cls_mask
-                    classwise_acc[cind] = correct_mask.sum() / assigned_gt_cls_mask.sum()
-
-                    cls_fg = fg_mask & pred_cls_mask
-                    cls_fg = cls_fg.sum() / pred_cls_mask.sum()
-                    classwise_fg[cind] = cls_fg
-
-                    # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
-                    # while without clamp it is N/A, which makes more sense.
-                    cls_sem_score_fg = (valid_sem_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
-                                   / (fg_mask & pred_cls_mask).sum()
-                    cls_sem_score_bg = (valid_sem_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
-                                   / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
-                    cls_score_fg = (valid_pred_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
-                               / (fg_mask & pred_cls_mask).sum()
-                    cls_score_bg = (valid_pred_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
-                               / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
-                    classwise_sem_score_fg[cind] = cls_sem_score_fg
-                    classwise_sem_score_bg[cind] = cls_sem_score_bg
-                    classwise_score_fg[cind] = cls_score_fg
-                    classwise_score_bg[cind] = cls_score_bg
-
-                # The following states are accumulated over updates
-                self.pred_ious.append(classwise_preds_iou)
-                self.pred_accs.append(classwise_acc)
-                self.pred_fgs.append(classwise_fg)
-                self.sem_score_fgs.append(classwise_sem_score_fg)
-                self.sem_score_bgs.append(classwise_sem_score_bg)
-                self.score_fgs.append(classwise_score_fg)
-                self.score_bgs.append(classwise_score_bg)
-                self.num_pred_boxes.append(classwise_num_pred_boxes)
-                self.num_gt_boxes.append(classwise_num_gt_boxes)
 
             # if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
             self.detections.append(valid_pred_boxes)
@@ -165,22 +222,7 @@ class KITTIEVAL(Metric):
             self.overlaps.append(overlap)
 
     def compute(self):
-        results = {'pred_ious': torch.stack(self.pred_ious, dim=0).nanmean(dim=0),
-                   'pred_accs': torch.stack(self.pred_accs, dim=0).nanmean(dim=0),
-                   'pred_fgs': torch.stack(self.pred_fgs, dim=0).nanmean(dim=0),
-                   'sem_score_fgs': torch.stack(self.sem_score_fgs, dim=0).nanmean(dim=0),
-                   'sem_score_bgs': torch.stack(self.sem_score_bgs, dim=0).nanmean(dim=0),
-                   'num_pred_boxes': torch.stack(self.num_pred_boxes, dim=0).nanmean(dim=0),
-                   'num_gt_boxes': torch.stack(self.num_gt_boxes, dim=0).nanmean(dim=0),
-                   'score_fgs': torch.stack(self.score_fgs, dim=0).nanmean(dim=0),
-                   'score_bgs': torch.stack(self.score_bgs, dim=0).nanmean(dim=0)}
         final_results = {}
-        for key, val in results.items():
-            classwise_results = {}
-            for cind, cls in enumerate(self.dataset.class_names + ['cls_agnostic']):
-                if not torch.isnan(val[cind]):
-                    classwise_results[cls] = val[cind].item()
-            final_results[key] = classwise_results
         if (len(self.detections) % self.reset_state_interval == 0) and cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
             # eval_class() takes ~45ms for each sample and linearly increasing
             # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
@@ -275,7 +317,7 @@ class KITTIEVAL(Metric):
             kitti_eval_metrics.pop('detailed_stats')
 
             final_results.update(kitti_eval_metrics)
-
+            # TODO(farzad) Does calling reset in compute make a trouble?
             self.reset()
 
         for key, val in final_results.items():
