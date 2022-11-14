@@ -150,10 +150,15 @@ class PVRCNNHead(RoIHeadTemplate):
         targets_dict = self.proposal_layer(batch_dict, nms_config=nms_mode)
         # should not use gt_roi for pseudo label generation
         if (self.training or self.print_loss_when_eval) and not disable_gt_roi_when_pseudo_labeling:
-            targets_dict = self.assign_targets(batch_dict, override_unlabeled_targets=self.model_cfg.get("ENABLE_RCNN_CONSISTENCY", False))
+            targets_dict = self.assign_targets(batch_dict)
             batch_dict['rois'] = targets_dict['rois']
             batch_dict['roi_scores'] = targets_dict['roi_scores']
             batch_dict['roi_labels'] = targets_dict['roi_labels']
+            targets_dict['unlabeled_inds'] = batch_dict['unlabeled_inds']
+            targets_dict['ori_unlabeled_boxes'] = batch_dict['ori_unlabeled_boxes']
+            # TODO(farzad) refactor this with global registry,
+            #  accessible in different places, not via passing through batch_dict
+            targets_dict['metric_registry'] = batch_dict['metric_registry']
 
         # RoI aware pooling
         pooled_features = self.roi_grid_pool(batch_dict)  # (BxN, 6x6x6, C)

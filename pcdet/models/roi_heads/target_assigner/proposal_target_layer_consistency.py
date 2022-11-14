@@ -116,7 +116,7 @@ class ProposalTargetLayerConsistency(nn.Module):
 
         gt_scores = batch_dict['pred_scores_ema'][index]
         gt_boxes = batch_dict['gt_boxes'][index]
-
+        # TODO(farzad) roi_scores_ema is no longer normalized. Before using the following, please consider normalization
         thresh_inds = (batch_dict['roi_scores_ema'][index] > 0.2).nonzero().view(-1)
         gt_scores = gt_scores[thresh_inds]
         sampled_inds = self.subsample_rois(max_overlaps=gt_scores)

@@ -96,7 +96,7 @@ def _max_score_replacement(batch_dict_a, batch_dict_b, unlabeled_inds, score_key
     for key in keys:
         batch_dict_a[key][unlabeled_inds] = batch_dict_cat[key][unlabeled_inds, ..., max_inds]
 
-
+# TODO(farzad) refactor this with global registry, accessible in different places, not via passing through batch_dict
 class MetricRegistry(object):
     def __init__(self, **kwargs):
         self._tag_metrics = {}
@@ -274,7 +274,8 @@ class PVRCNN_SSL(Detector3DTemplate):
                     # Pass teacher's proposal to the student.
                     # To let proposal_layer continues for labeled data we pass rois with _ema postfix
                     batch_dict['rois_ema'] = batch_dict_ema['rois'].detach().clone()
-                    batch_dict['roi_scores_ema'] = torch.sigmoid(batch_dict_ema['roi_scores'].detach().clone())
+                    # TODO(farzad) the normalization is done lazily, to be consistent with the other unnormalized roi_scores.
+                    batch_dict['roi_scores_ema'] = batch_dict_ema['roi_scores'].detach().clone()
                     batch_dict['roi_labels_ema'] = batch_dict_ema['roi_labels'].detach().clone()
                     batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='rois_ema')
                     if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
