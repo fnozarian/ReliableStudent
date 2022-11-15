@@ -17,7 +17,7 @@ class RoIHeadTemplate(nn.Module):
         self.box_coder = getattr(box_coder_utils, self.model_cfg.TARGET_CONFIG.BOX_CODER)(
             **self.model_cfg.TARGET_CONFIG.get('BOX_CODER_CONFIG', {})
         )
-        if self.model_cfg.TARGET_CONFIG.USE_CONSISTENCY:
+        if self.model_cfg.ENABLE_RCNN_CONSISTENCY:
             self.proposal_target_layer = ProposalTargetLayerConsistency(roi_sampler_cfg=self.model_cfg.TARGET_CONFIG)
         else:
             self.proposal_target_layer = ProposalTargetLayer(roi_sampler_cfg=self.model_cfg.TARGET_CONFIG)
@@ -390,7 +390,8 @@ class RoIHeadTemplate(nn.Module):
     def get_loss(self, tb_dict=None, scalar=True):
         tb_dict = {} if tb_dict is None else tb_dict
 
-        self.pre_loss_filtering()
+        if self.model_cfg.ENABLE_RCNN_CONSISTENCY:
+            self.pre_loss_filtering()
 
         self.update_metrics(self.forward_ret_dict, mask_type='reg')
         self.update_metrics(self.forward_ret_dict, mask_type='cls')

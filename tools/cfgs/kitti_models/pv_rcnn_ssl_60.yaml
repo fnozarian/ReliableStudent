@@ -204,7 +204,6 @@ MODEL:
             HARD_BG_RATIO: 0.8
 
             REG_FG_THRESH: 0.55
-            USE_CONSISTENCY: True
             UNLABELED_SAMPLER_TYPE: gt_scores_sampler
             UNLABELED_REG_FG_THRESH: 0.7
 
