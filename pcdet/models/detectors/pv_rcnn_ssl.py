@@ -121,18 +121,12 @@ class MetricRegistry(object):
     def tags(self):
         return self._tag_metrics.keys()
 
-
-def vis(batch_dict, unlabeled_inds, box_key='gt_boxes', score_key=None):
+def vis(points, gt_boxes, pred_boxes=None, pred_scores=None, pred_labels=None):
     """A simple/temporary visualization for debugging"""
-    for uind in unlabeled_inds:
-        mask = batch_dict['points'][:, 0] == uind
-        boxes = batch_dict[box_key][uind, :, :-1]
-        labels = batch_dict[box_key][uind, :, -1].int()
-        scores = torch.ones_like(labels) if score_key is None else batch_dict[score_key][uind].view_as(labels)
-
-        V.draw_scenes(points=batch_dict['points'][mask, 1:], ref_boxes=boxes, ref_scores=scores, ref_labels=labels)
-        mlab.show(stop=True)
-        mlab.close()
+    V.draw_scenes(points=points, gt_boxes=gt_boxes,
+                  ref_boxes=pred_boxes, ref_scores=pred_scores, ref_labels=pred_labels)
+    mlab.show(stop=True)
+    mlab.close()
 
 class PVRCNN_SSL(Detector3DTemplate):
     def __init__(self, model_cfg, num_class, dataset):
@@ -274,7 +268,15 @@ class PVRCNN_SSL(Detector3DTemplate):
             batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
 
             if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
-                vis(batch_dict, unlabeled_inds)
+                for i, uind in enumerate(unlabeled_inds):
+                    mask = batch_dict['points'][:, 0] == uind
+                    point = batch_dict['points'][mask, 1:]
+                    pred_boxes = batch_dict['gt_boxes'][uind][:, :-1]
+                    pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
+                    pred_scores = torch.zeros_like(pred_labels).float()
+                    pred_scores[:pseudo_scores[i].shape[0]] = pseudo_scores[i]
+                    vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1],
+                        pred_boxes=pred_boxes, pred_scores=pred_scores, pred_labels=pred_labels)
 
             # ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
             # pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
@@ -285,7 +287,6 @@ class PVRCNN_SSL(Detector3DTemplate):
             # self.metrics['after_filtering'].update(**metric_inputs)  # commented to reduce complexity.
 
             batch_dict['metric_registry'] = self.metric_registry
-            batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
             for cur_module in self.pv_rcnn.module_list:
                 if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
                     # Pass teacher's proposal to the student.
@@ -317,8 +318,15 @@ class PVRCNN_SSL(Detector3DTemplate):
                             batch_dict['pred_scores_ema_var'][ui] = scores_var[i]
                             batch_dict['pred_boxes_ema_var'][ui] = boxes_var[i]
 
-                    if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
-                        vis(batch_dict, unlabeled_inds, score_key='pred_scores_ema')
+                    # if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
+                    #     for i, uind in enumerate(unlabeled_inds):
+                    #         mask = batch_dict['points'][:, 0] == uind
+                    #         point = batch_dict['points'][mask, 1:]
+                    #         pred_boxes = batch_dict['gt_boxes'][uind][:, :-1]
+                    #         pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
+                    #         pred_scores = batch_dict['pred_scores_ema'][uind]
+                    #         vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1], pred_boxes=pred_boxes,
+                    #             pred_scores=pred_scores, pred_labels=pred_labels)
 
                 batch_dict = cur_module(batch_dict)
 
