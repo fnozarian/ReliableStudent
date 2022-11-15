@@ -14,6 +14,8 @@ from.pv_rcnn import PVRCNN
 from ...utils.stats_utils import KITTIEvalMetrics, PredQualityMetrics
 from torchmetrics.collections import MetricCollection
 import torch.distributed as dist
+import mayavi.mlab as mlab
+from visual_utils import visualize_utils as V
 
 def _to_dict_of_tensors(list_of_dicts, agg_mode='stack'):
     new_dict = {}
@@ -119,6 +121,18 @@ class MetricRegistry(object):
     def tags(self):
         return self._tag_metrics.keys()
 
+
+def vis(batch_dict, unlabeled_inds, box_key='gt_boxes', score_key=None):
+    """A simple/temporary visualization for debugging"""
+    for uind in unlabeled_inds:
+        mask = batch_dict['points'][:, 0] == uind
+        boxes = batch_dict[box_key][uind, :, :-1]
+        labels = batch_dict[box_key][uind, :, -1].int()
+        scores = torch.ones_like(labels) if score_key is None else batch_dict[score_key][uind].view_as(labels)
+
+        V.draw_scenes(points=batch_dict['points'][mask, 1:], ref_boxes=boxes, ref_scores=scores, ref_labels=labels)
+        mlab.show(stop=True)
+        mlab.close()
 
 class PVRCNN_SSL(Detector3DTemplate):
     def __init__(self, model_cfg, num_class, dataset):
@@ -259,6 +273,9 @@ class PVRCNN_SSL(Detector3DTemplate):
             # apply student's augs on teacher's pseudo-labels (filtered) only (not points)
             batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
 
+            if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
+                vis(batch_dict, unlabeled_inds)
+
             # ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
             # pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
             # metric_inputs = {'preds': pseudo_boxes_list,
@@ -299,6 +316,9 @@ class PVRCNN_SSL(Detector3DTemplate):
                         for i, ui in enumerate(unlabeled_inds):
                             batch_dict['pred_scores_ema_var'][ui] = scores_var[i]
                             batch_dict['pred_boxes_ema_var'][ui] = boxes_var[i]
+
+                    if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
+                        vis(batch_dict, unlabeled_inds, score_key='pred_scores_ema')
 
                 batch_dict = cur_module(batch_dict)
 
