@@ -7,6 +7,16 @@ from ...utils import box_coder_utils, common_utils, loss_utils
 from ..model_utils.model_nms_utils import class_agnostic_nms
 from .target_assigner.proposal_target_layer import ProposalTargetLayer
 from .target_assigner.proposal_target_layer_consistency import ProposalTargetLayerConsistency
+import mayavi.mlab as mlab
+from visual_utils import visualize_utils as V
+
+
+def vis(points, gt_boxes, pred_boxes=None, pred_scores=None, pred_labels=None):
+    """A simple/temporary visualization for debugging"""
+    V.draw_scenes(points=points, gt_boxes=gt_boxes,
+                  ref_boxes=pred_boxes, ref_scores=pred_scores, ref_labels=pred_labels)
+    mlab.show(stop=True)
+    mlab.close()
 
 
 class RoIHeadTemplate(nn.Module):
@@ -202,6 +212,13 @@ class RoIHeadTemplate(nn.Module):
             pred_scores.append(pred_score)
             pred_sem_scores.append(pred_sem_score)
 
+            if self.model_cfg.get('ENABLE_VIS', False):
+                points_mask = targets_dict['points'][:, 0] == uind
+                points = targets_dict['points'][points_mask, 1:]
+                vis(points, gt_boxes=target_boxes[:, :-1], pred_boxes=pred_boxes,
+                    pred_scores=pred_score.view(-1), pred_labels=pred_label.view(-1))
+        targets_dict.pop('points')
+
         metric_inputs = {'preds': preds, 'targets': targets, 'pred_scores': pred_scores,
                          'pred_sem_scores': pred_sem_scores}
         metrics.update(**metric_inputs)
@@ -212,6 +229,9 @@ class RoIHeadTemplate(nn.Module):
             targets_dict = self.proposal_target_layer.forward(batch_dict)
 
         batch_size = batch_dict['batch_size']
+
+        # Adding points temporarily to the targets_dict for visualization inside update_metrics
+        targets_dict['points'] = batch_dict['points']
 
         rois = targets_dict['rois']  # (B, N, 7 + C)
         gt_of_rois = targets_dict['gt_of_rois']  # (B, N, 7 + C + 1)
@@ -392,6 +412,8 @@ class RoIHeadTemplate(nn.Module):
 
         if self.model_cfg.ENABLE_RCNN_CONSISTENCY:
             self.pre_loss_filtering()
+
+
 
         self.update_metrics(self.forward_ret_dict, mask_type='reg')
         self.update_metrics(self.forward_ret_dict, mask_type='cls')
