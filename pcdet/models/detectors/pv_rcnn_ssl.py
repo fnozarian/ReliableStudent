@@ -267,16 +267,16 @@ class PVRCNN_SSL(Detector3DTemplate):
             # apply student's augs on teacher's pseudo-labels (filtered) only (not points)
             batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
 
-            if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
-                for i, uind in enumerate(unlabeled_inds):
-                    mask = batch_dict['points'][:, 0] == uind
-                    point = batch_dict['points'][mask, 1:]
-                    pred_boxes = batch_dict['gt_boxes'][uind][:, :-1]
-                    pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
-                    pred_scores = torch.zeros_like(pred_labels).float()
-                    pred_scores[:pseudo_scores[i].shape[0]] = pseudo_scores[i]
-                    vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1],
-                        pred_boxes=pred_boxes, pred_scores=pred_scores, pred_labels=pred_labels)
+            # if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
+            #     for i, uind in enumerate(unlabeled_inds):
+            #         mask = batch_dict['points'][:, 0] == uind
+            #         point = batch_dict['points'][mask, 1:]
+            #         pred_boxes = batch_dict['gt_boxes'][uind][:, :-1]
+            #         pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
+            #         pred_scores = torch.zeros_like(pred_labels).float()
+            #         pred_scores[:pseudo_scores[i].shape[0]] = pseudo_scores[i]
+            #         vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1],
+            #             pred_boxes=pred_boxes, pred_scores=pred_scores, pred_labels=pred_labels)
 
             # ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
             # pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
@@ -287,6 +287,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             # self.metrics['after_filtering'].update(**metric_inputs)  # commented to reduce complexity.
 
             batch_dict['metric_registry'] = self.metric_registry
+            batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
             for cur_module in self.pv_rcnn.module_list:
                 if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
                     # Pass teacher's proposal to the student.
