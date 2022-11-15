@@ -78,7 +78,7 @@ class PredQualityMetrics(Metric):
 
             classwise_metrics = {}
             for metric_name in self.metrics_name:
-                classwise_metrics[metric_name] = sample_tensor.new_zeros(num_classes + 1).fill_(torch.nan)
+                classwise_metrics[metric_name] = sample_tensor.new_zeros(num_classes + 1).fill_(float('nan'))
 
             for cind in range(num_classes + 1):
                 pred_cls_mask = pred_cls_agnostic_mask if cind == num_classes else pred_labels == cind
@@ -128,7 +128,7 @@ class PredQualityMetrics(Metric):
         # If no prediction is given all states are filled with nan tensors
         if len(preds) == 0:
             for metric_name in self.metrics_name:
-                getattr(self, metric_name).append(sample_tensor.new_zeros(num_classes + 1).fill_(torch.nan))
+                getattr(self, metric_name).append(sample_tensor.new_zeros(num_classes + 1).fill_(float('nan')))
 
     def compute(self):
         final_results = {}
