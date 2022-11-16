@@ -202,7 +202,7 @@ class RoIHeadTemplate(nn.Module):
 
             pred_sem_score = torch.sigmoid(targets_dict['roi_scores'])[uind][mask].unsqueeze(-1)
 
-            pred_boxes = targets_dict['gt_of_rois'][uind][mask, :-1] if pred_type == 'pl' else targets_dict['rois'][uind][mask]
+            pred_boxes = targets_dict['gt_of_rois_src'][uind][mask, :-1] if pred_type == 'pl' else targets_dict['rois'][uind][mask]
             pred = torch.cat([pred_boxes, pred_label], dim=-1)
 
             target_boxes = targets_dict['ori_unlabeled_boxes'][i]
@@ -412,8 +412,6 @@ class RoIHeadTemplate(nn.Module):
 
         if self.model_cfg.ENABLE_RCNN_CONSISTENCY:
             self.pre_loss_filtering()
-
-
 
         self.update_metrics(self.forward_ret_dict, mask_type='reg')
         self.update_metrics(self.forward_ret_dict, mask_type='cls')
