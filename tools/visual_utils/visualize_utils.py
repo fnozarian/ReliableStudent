@@ -1,6 +1,28 @@
-import mayavi.mlab as mlab
 import numpy as np
 import torch
+import os
+from pcdet.config import cfg
+# imports mayavi only if the environment supports a display
+if os.name == 'posix' and "DISPLAY" not in os.environ:
+    headless_server = True
+    vis_dir = cfg.ROOT_DIR / 'output' / 'vis'
+    vis_dir.mkdir(parents=True, exist_ok=True)
+    """ Following will create a virtual display, Install pyvirtualdisplay using <pip install pyvirtualdisplay> """
+    from pyvirtualdisplay import Display
+    display = Display(visible=0, size=(1920, 1080))
+    display.start()
+    import mayavi.mlab as mlab
+    mlab.options.offscreen = True
+
+else:
+    import mayavi.mlab as mlab
+    headless_server = False
+
+
+
+    
+    
+
 
 box_colormap = [
     [1, 1, 1],
@@ -8,6 +30,20 @@ box_colormap = [
     [0, 1, 1],
     [1, 1, 0],
 ]
+
+def vis(points, gt_boxes, pred_boxes=None, pred_scores=None, pred_labels=None, filename="test.png"):
+    """A simple/temporary visualization for debugging"""
+    draw_scenes(points=points, gt_boxes=gt_boxes,
+                  ref_boxes=pred_boxes, ref_scores=pred_scores, ref_labels=pred_labels)
+    if headless_server:
+        mlab.savefig(filename=os.path.join(vis_dir, filename))
+        print("Saved Visualisation at {}".format(os.path.join(vis_dir, filename)))
+    
+    else:
+        mlab.show(stop=True)
+        mlab.close()    
+    
+        
 
 
 def check_numpy_to_torch(x):
@@ -70,7 +106,7 @@ def boxes_to_corners_3d(boxes3d):
 
 
 def visualize_pts(pts, fig=None, bgcolor=(0, 0, 0), fgcolor=(1.0, 1.0, 1.0),
-                  show_intensity=False, size=(600, 600), draw_origin=True):
+                  show_intensity=False, size=(1920, 1080), draw_origin=True):
     if not isinstance(pts, np.ndarray):
         pts = pts.cpu().numpy()
     if fig is None:
@@ -79,6 +115,7 @@ def visualize_pts(pts, fig=None, bgcolor=(0, 0, 0), fgcolor=(1.0, 1.0, 1.0),
     if show_intensity:
         G = mlab.points3d(pts[:, 0], pts[:, 1], pts[:, 2], pts[:, 3], mode='point',
                           colormap='gnuplot', scale_factor=1, figure=fig)
+                    
     else:
         G = mlab.points3d(pts[:, 0], pts[:, 1], pts[:, 2], mode='point',
                           colormap='gnuplot', scale_factor=1, figure=fig)
@@ -96,7 +133,7 @@ def draw_sphere_pts(pts, color=(0, 1, 0), fig=None, bgcolor=(0, 0, 0), scale_fac
         pts = pts.cpu().numpy()
 
     if fig is None:
-        fig = mlab.figure(figure=None, bgcolor=bgcolor, fgcolor=None, engine=None, size=(600, 600))
+        fig = mlab.figure(figure=None, bgcolor=bgcolor, fgcolor=None, engine=None, size=(1920, 1080))
 
     if isinstance(color, np.ndarray) and color.shape[0] == 1:
         color = color[0]
