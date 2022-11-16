@@ -14,14 +14,7 @@ from.pv_rcnn import PVRCNN
 from ...utils.stats_utils import KITTIEvalMetrics, PredQualityMetrics
 from torchmetrics.collections import MetricCollection
 import torch.distributed as dist
-
-# imports mayavi only if the environment supports a display
-if os.name == 'posix' and "DISPLAY" not in os.environ:
-    headless_server = True
-else:
-    headless_server = False
-    import mayavi.mlab as mlab
-    from visual_utils import visualize_utils as V
+from visual_utils import visualize_utils as V
 
 def _to_dict_of_tensors(list_of_dicts, agg_mode='stack'):
     new_dict = {}
@@ -127,12 +120,7 @@ class MetricRegistry(object):
     def tags(self):
         return self._tag_metrics.keys()
 
-def vis(points, gt_boxes, pred_boxes=None, pred_scores=None, pred_labels=None):
-    """A simple/temporary visualization for debugging"""
-    V.draw_scenes(points=points, gt_boxes=gt_boxes,
-                  ref_boxes=pred_boxes, ref_scores=pred_scores, ref_labels=pred_labels)
-    mlab.show(stop=True)
-    mlab.close()
+
 
 class PVRCNN_SSL(Detector3DTemplate):
     def __init__(self, model_cfg, num_class, dataset):
@@ -281,7 +269,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             #         pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
             #         pred_scores = torch.zeros_like(pred_labels).float()
             #         pred_scores[:pseudo_scores[i].shape[0]] = pseudo_scores[i]
-            #         vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1],
+            #         V.vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1],
             #             pred_boxes=pred_boxes, pred_scores=pred_scores, pred_labels=pred_labels)
 
             # ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
@@ -332,7 +320,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                     #         pred_boxes = batch_dict['gt_boxes'][uind][:, :-1]
                     #         pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
                     #         pred_scores = batch_dict['pred_scores_ema'][uind]
-                    #         vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1], pred_boxes=pred_boxes,
+                    #         V.vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1], pred_boxes=pred_boxes,
                     #             pred_scores=pred_scores, pred_labels=pred_labels)
 
                 batch_dict = cur_module(batch_dict)

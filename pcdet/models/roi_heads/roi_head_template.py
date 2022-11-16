@@ -10,21 +10,11 @@ from ..model_utils.model_nms_utils import class_agnostic_nms
 from .target_assigner.proposal_target_layer import ProposalTargetLayer
 from .target_assigner.proposal_target_layer_consistency import ProposalTargetLayerConsistency
 
-# imports mayavi only if the environment supports a display
-if os.name == 'posix' and "DISPLAY" not in os.environ:
-    headless_server = True
-else:
-    headless_server = False
-    import mayavi.mlab as mlab
-    from visual_utils import visualize_utils as V
+from visual_utils import visualize_utils as V
 
 
-def vis(points, gt_boxes, pred_boxes=None, pred_scores=None, pred_labels=None):
-    """A simple/temporary visualization for debugging"""
-    V.draw_scenes(points=points, gt_boxes=gt_boxes,
-                  ref_boxes=pred_boxes, ref_scores=pred_scores, ref_labels=pred_labels)
-    mlab.show(stop=True)
-    mlab.close()
+
+
 
 
 class RoIHeadTemplate(nn.Module):
@@ -223,8 +213,8 @@ class RoIHeadTemplate(nn.Module):
             if self.model_cfg.get('ENABLE_VIS', False):
                 points_mask = targets_dict['points'][:, 0] == uind
                 points = targets_dict['points'][points_mask, 1:]
-                vis(points, gt_boxes=target_boxes[:, :-1], pred_boxes=pred_boxes,
-                    pred_scores=pred_score.view(-1), pred_labels=pred_label.view(-1))
+                V.vis(points, gt_boxes=target_boxes[:, :-1], pred_boxes=pred_boxes,
+                    pred_scores=pred_score.view(-1), pred_labels=pred_label.view(-1), filename=f'vis_{pred_type}_{uind}.png')
 
 
         metric_inputs = {'preds': preds, 'targets': targets, 'pred_scores': pred_scores,
