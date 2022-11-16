@@ -217,7 +217,7 @@ class RoIHeadTemplate(nn.Module):
                 points = targets_dict['points'][points_mask, 1:]
                 vis(points, gt_boxes=target_boxes[:, :-1], pred_boxes=pred_boxes,
                     pred_scores=pred_score.view(-1), pred_labels=pred_label.view(-1))
-        targets_dict.pop('points')
+
 
         metric_inputs = {'preds': preds, 'targets': targets, 'pred_scores': pred_scores,
                          'pred_sem_scores': pred_sem_scores}
