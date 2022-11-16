@@ -14,8 +14,14 @@ from.pv_rcnn import PVRCNN
 from ...utils.stats_utils import KITTIEvalMetrics, PredQualityMetrics
 from torchmetrics.collections import MetricCollection
 import torch.distributed as dist
-import mayavi.mlab as mlab
-from visual_utils import visualize_utils as V
+
+# imports mayavi only if the environment supports a display
+if os.name == 'posix' and "DISPLAY" not in os.environ:
+    headless_server = True
+else:
+    headless_server = False
+    import mayavi.mlab as mlab
+    from visual_utils import visualize_utils as V
 
 def _to_dict_of_tensors(list_of_dicts, agg_mode='stack'):
     new_dict = {}

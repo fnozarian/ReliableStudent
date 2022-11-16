@@ -1,3 +1,5 @@
+import os 
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -7,8 +9,14 @@ from ...utils import box_coder_utils, common_utils, loss_utils
 from ..model_utils.model_nms_utils import class_agnostic_nms
 from .target_assigner.proposal_target_layer import ProposalTargetLayer
 from .target_assigner.proposal_target_layer_consistency import ProposalTargetLayerConsistency
-import mayavi.mlab as mlab
-from visual_utils import visualize_utils as V
+
+# imports mayavi only if the environment supports a display
+if os.name == 'posix' and "DISPLAY" not in os.environ:
+    headless_server = True
+else:
+    headless_server = False
+    import mayavi.mlab as mlab
+    from visual_utils import visualize_utils as V
 
 
 def vis(points, gt_boxes, pred_boxes=None, pred_scores=None, pred_labels=None):
