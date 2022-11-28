@@ -386,9 +386,9 @@ class PVRCNN_SSL(Detector3DTemplate):
                                  for pred_dict in pred_dicts]
             pseudo_scores = [pred_dict['pred_scores'] for pred_dict in pred_dicts]
             metric_inputs = {'preds': pseudo_boxes_list,
-                             'targets': batch_dict['gt_boxes'],
                              'pred_scores': pseudo_scores,
-                             'pred_sem_scores': pseudo_scores}
+                             'ground_truths': batch_dict['gt_boxes']}
+
             self.metric_registry.get('test').update(**metric_inputs)
 
             return pred_dicts, recall_dicts, {}

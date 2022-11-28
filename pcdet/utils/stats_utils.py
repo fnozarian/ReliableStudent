@@ -31,36 +31,44 @@ class PredQualityMetrics(Metric):
         self.tag = kwargs.get('tag', None)
         self.dataset = kwargs.get('dataset', None)
         self.cls_bg_thresh = kwargs.get('cls_bg_thresh', None)
-        self.metrics_name = ["pred_ious", "pred_accs", "pred_fgs", "sem_score_fgs", "sem_score_bgs",
-                             "score_fgs", "score_bgs", "num_pred_boxes", "num_gt_boxes"]
+        self.metrics_name = ["pred_ious", "pred_accs", "pred_fgs", "sem_score_fgs", "sem_score_bgs", "score_fgs",
+                             "score_bgs", "target_score_fg", "target_score_bg", "num_pred_boxes", "num_gt_boxes"]
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
 
         for metric_name in self.metrics_name:
             self.add_state(metric_name, default=[], dist_reduce_fx='cat')
 
-    def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor],
-               pred_sem_scores: [torch.Tensor]) -> None:
-        assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
-        assert len(pred_scores) == len(pred_sem_scores)
-        preds = [pred_box.clone().detach() for pred_box in preds]
-        targets = [gt_box.clone().detach() for gt_box in targets]
-        pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
-        pred_sem_scores = [score.clone().detach() for score in pred_sem_scores]
+    def update(self, preds: [torch.Tensor], ground_truths: [torch.Tensor], pred_scores: [torch.Tensor],
+               rois=None, roi_scores=None, targets=None, target_scores=None) -> None:
+        assert all([pred.shape[-1] == 8 for pred in preds]) and all([gt.shape[-1] == 8 for gt in ground_truths])
+        if roi_scores is not None:
+            assert len(pred_scores) == len(roi_scores)
 
-        sample_tensor = preds[0] if len(preds) else targets[0]
+        roi_scores = [score.clone().detach() for score in roi_scores] if roi_scores is not None else None
+        preds = [pred_box.clone().detach() for pred_box in preds]
+        pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
+        target_scores = [target_score.clone().detach() for target_score in target_scores] if target_scores is not None else None
+        ground_truths = [gt_box.clone().detach() for gt_box in ground_truths]
+
+        sample_tensor = preds[0] if len(preds) else ground_truths[0]
         num_classes = len(self.dataset.class_names)
         for i in range(len(preds)):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
-            valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
+            valid_pred_boxes = preds[i][valid_preds_mask]
+
             if pred_scores[i].ndim == 1:
                 pred_scores[i] = pred_scores[i].unsqueeze(dim=-1)
-            if pred_sem_scores[i].ndim == 1:
-                pred_sem_scores[i] = pred_sem_scores[i].unsqueeze(dim=-1)
+            if roi_scores is not None and roi_scores[i].ndim == 1:
+                roi_scores[i] = roi_scores[i].unsqueeze(dim=-1)
+            if target_scores is not None and target_scores[i].ndim == 1:
+                target_scores[i] = target_scores[i].unsqueeze(dim=-1)
 
-            valid_pred_boxes = preds[i][valid_preds_mask]
-            valid_gt_boxes = targets[i][valid_gts_mask]
             valid_pred_scores = pred_scores[i][valid_preds_mask.nonzero().view(-1)]
-            valid_sem_scores = pred_sem_scores[i][valid_preds_mask.nonzero().view(-1)]
+            valid_roi_scores = roi_scores[i][valid_preds_mask.nonzero().view(-1)] if roi_scores else None
+            valid_target_scores = target_scores[i][valid_preds_mask.nonzero().view(-1)] if target_scores else None
+
+            valid_gts_mask = torch.logical_not(torch.all(ground_truths[i] == 0, dim=-1))
+            valid_gt_boxes = ground_truths[i][valid_gts_mask]
 
             # Starting class indices from zero
             valid_pred_boxes[:, -1] -= 1
@@ -102,25 +110,35 @@ class PredQualityMetrics(Metric):
                     correct_mask = pred_cls_mask & assigned_gt_cls_mask
                     classwise_metrics['pred_accs'][cind] = correct_mask.sum() / assigned_gt_cls_mask.sum()
 
-                    # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
-                    # while without clamp it is N/A, which makes more sense.
-
-                    cls_sem_score_fg = (valid_sem_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
-                                       / (fg_mask & pred_cls_mask).sum()
-                    classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
-
                     bg_maks = preds_iou_max < self.cls_bg_thresh
-                    cls_sem_score_bg = (valid_sem_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
-                                       / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
-                    classwise_metrics['sem_score_bgs'][cind] = cls_sem_score_bg
+
+                    cls_score_fg = (valid_pred_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
+                                   / (fg_mask & pred_cls_mask).sum()
+                    classwise_metrics['score_fgs'][cind] = cls_score_fg
 
                     cls_score_bg = (valid_pred_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
                                    / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
                     classwise_metrics['score_bgs'][cind] = cls_score_bg
 
-                    cls_score_fg = (valid_pred_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
-                                   / (fg_mask & pred_cls_mask).sum()
-                    classwise_metrics['score_fgs'][cind] = cls_score_fg
+                    # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
+                    # while without clamp it is N/A, which makes more sense.
+                    if valid_roi_scores is not None:
+                        cls_sem_score_fg = (valid_roi_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
+                                           / (fg_mask & pred_cls_mask).sum()
+                        classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
+
+                        cls_sem_score_bg = (valid_roi_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
+                                           / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
+                        classwise_metrics['sem_score_bgs'][cind] = cls_sem_score_bg
+
+                    if valid_target_scores is not None:
+                        cls_target_score_fg = (valid_target_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
+                                              / (fg_mask & pred_cls_mask).sum()
+                        classwise_metrics['target_score_fg'][cind] = cls_target_score_fg
+
+                        cls_target_score_bg = (valid_target_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
+                                              / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
+                        classwise_metrics['target_score_bg'][cind] = cls_target_score_bg
 
             for key, val in classwise_metrics.items():
                 getattr(self, key).append(val)
@@ -182,26 +200,28 @@ class KITTIEvalMetrics(Metric):
         self.add_state("groundtruths", default=[])
         self.add_state("overlaps", default=[])
 
-    def update(self, preds: [torch.Tensor], targets: [torch.Tensor], pred_scores: [torch.Tensor], pred_sem_scores: [torch.Tensor]) -> None:
-        assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in targets])
-        assert len(pred_scores) == len(pred_sem_scores)
+    def update(self, preds: [torch.Tensor], pred_scores: [torch.Tensor], ground_truths: [torch.Tensor],
+               rois=None, roi_scores=None, targets=None, target_scores=None) -> None:
+        assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in ground_truths])
+        if roi_scores is not None:
+            assert len(pred_scores) == len(roi_scores)
         preds = [pred_box.clone().detach() for pred_box in preds]
-        targets = [gt_box.clone().detach() for gt_box in targets]
+        ground_truths = [gt_box.clone().detach() for gt_box in ground_truths]
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
-        pred_sem_scores = [score.clone().detach() for score in pred_sem_scores]
+        roi_scores = [score.clone().detach() for score in roi_scores] if roi_scores is not None else None
 
         for i in range(len(preds)):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
-            valid_gts_mask = torch.logical_not(torch.all(targets[i] == 0, dim=-1))
+            valid_gts_mask = torch.logical_not(torch.all(ground_truths[i] == 0, dim=-1))
             if pred_scores[i].ndim == 1:
                 pred_scores[i] = pred_scores[i].unsqueeze(dim=-1)
-            if pred_sem_scores[i].ndim == 1:
-                pred_sem_scores[i] = pred_sem_scores[i].unsqueeze(dim=-1)
+            if roi_scores is not None and roi_scores[i].ndim == 1:
+                roi_scores[i] = roi_scores[i].unsqueeze(dim=-1)
 
             valid_pred_boxes = preds[i][valid_preds_mask]
-            valid_gt_boxes = targets[i][valid_gts_mask]
+            valid_gt_boxes = ground_truths[i][valid_gts_mask]
             valid_pred_scores = pred_scores[i][valid_preds_mask.nonzero().view(-1)]
-            valid_sem_scores = pred_sem_scores[i][valid_preds_mask.nonzero().view(-1)]
+            # valid_roi_scores = roi_scores[i][valid_preds_mask.nonzero().view(-1)] if roi_scores else None
 
             # Starting class indices from zero
             valid_pred_boxes[:, -1] -= 1

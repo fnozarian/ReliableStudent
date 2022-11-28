@@ -185,40 +185,63 @@ class RoIHeadTemplate(nn.Module):
             targets_dict['gt_of_rois_var'][unlabeled_inds, :num_rois_ema, :-1] = batch_dict['pred_boxes_ema_var'][
                 unlabeled_inds]
 
-    def update_metrics(self, targets_dict, mask_type='reg', pred_type='pl'):
+    def update_metrics(self, targets_dict, mask_type='reg', pred_type='pred'):
         metric_registry = targets_dict['metric_registry']
         tag = f'rcnn_{pred_type}_metrics_{mask_type}'
         metrics = metric_registry.get(tag)
         unlabeled_inds = targets_dict['unlabeled_inds']
 
-        preds, targets, pred_scores, pred_sem_scores = [], [], [], []
+        sample_preds, sample_pred_scores, sample_gts, sample_rois, sample_roi_scores, sample_targets, sample_target_scores = [], [], [], [], [], [], []
         for i, uind in enumerate(unlabeled_inds):
             mask = (targets_dict['reg_valid_mask'][uind] > 0) if mask_type == 'reg' else (
                         targets_dict['rcnn_cls_labels'][uind] >= 0)
-            pred_label = targets_dict['roi_labels'][uind][mask].unsqueeze(-1)
-            pred_score = targets_dict['rcnn_cls_labels'][uind][mask].unsqueeze(-1)
 
-            pred_sem_score = torch.sigmoid(targets_dict['roi_scores'])[uind][mask].unsqueeze(-1)
+            # (Proposals) ROI info
+            rois = targets_dict['rois'][uind][mask].detach().clone()
+            roi_labels = targets_dict['roi_labels'][uind][mask].unsqueeze(-1).detach().clone()
+            roi_scores = torch.sigmoid(targets_dict['roi_scores'])[uind][mask].detach().clone()
+            roi_labeled_boxes = torch.cat([rois, roi_labels], dim=-1)
+            sample_rois.append(roi_labeled_boxes)
+            sample_roi_scores.append(roi_scores)
 
-            pred_boxes = targets_dict['gt_of_rois_src'][uind][mask, :-1] if pred_type == 'pl' else targets_dict['rois'][uind][mask]
-            pred = torch.cat([pred_boxes, pred_label], dim=-1)
+            # (Pseudo labels) Target info
+            target_labeled_boxes = targets_dict['gt_of_rois_src'][uind][mask].detach().clone()
+            target_scores = targets_dict['rcnn_cls_labels'][uind][mask].detach().clone()
+            sample_targets.append(target_labeled_boxes)
+            sample_target_scores.append(target_scores)
 
-            target_boxes = targets_dict['ori_unlabeled_boxes'][i]
+            # Pred info
+            pred_boxes = targets_dict['batch_box_preds'][uind][mask].detach().clone()
+            pred_scores = torch.sigmoid(targets_dict['rcnn_cls']).view_as(targets_dict['rcnn_cls_labels'])[uind][mask].detach().clone()
+            pred_labeled_boxes = torch.cat([pred_boxes, roi_labels], dim=-1)
+            sample_preds.append(pred_labeled_boxes)
+            sample_pred_scores.append(pred_scores)
 
-            preds.append(pred)
-            targets.append(target_boxes)
-            pred_scores.append(pred_score)
-            pred_sem_scores.append(pred_sem_score)
+            # (Real labels) GT info
+            gt_labeled_boxes = targets_dict['ori_unlabeled_boxes'][i]
+            sample_gts.append(gt_labeled_boxes)
 
             if self.model_cfg.get('ENABLE_VIS', False):
                 points_mask = targets_dict['points'][:, 0] == uind
                 points = targets_dict['points'][points_mask, 1:]
-                V.vis(points, gt_boxes=target_boxes[:, :-1], pred_boxes=pred_boxes,
-                    pred_scores=pred_score.view(-1), pred_labels=pred_label.view(-1), filename=f'vis_{pred_type}_{uind}.png')
+                if pred_type == 'roi':
+                    vis_pred_boxes = roi_labeled_boxes[:, :-1]
+                    vis_pred_scores = roi_scores
+                elif pred_type == 'pl':
+                    vis_pred_boxes = target_labeled_boxes[:, :-1]
+                    vis_pred_scores = target_scores
+                elif pred_type == 'pred':
+                    vis_pred_boxes = pred_boxes
+                    vis_pred_scores = pred_scores
+                else:
+                    raise ValueError(pred_type)
 
+                V.vis(points, gt_boxes=gt_labeled_boxes[:, :-1], pred_boxes=vis_pred_boxes,
+                      pred_scores=vis_pred_scores, pred_labels=roi_labels.view(-1),
+                      filename=f'vis_{pred_type}_{uind}.png')
 
-        metric_inputs = {'preds': preds, 'targets': targets, 'pred_scores': pred_scores,
-                         'pred_sem_scores': pred_sem_scores}
+        metric_inputs = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois, 'roi_scores': sample_roi_scores,
+                         'ground_truths': sample_gts, 'targets': sample_targets, 'target_scores': sample_target_scores}
         metrics.update(**metric_inputs)
 
     def assign_targets(self, batch_dict):
@@ -411,7 +434,7 @@ class RoIHeadTemplate(nn.Module):
         if self.model_cfg.ENABLE_RCNN_CONSISTENCY:
             self.pre_loss_filtering()
 
-        self.update_metrics(self.forward_ret_dict, mask_type='reg')
+        # self.update_metrics(self.forward_ret_dict, mask_type='reg')
         self.update_metrics(self.forward_ret_dict, mask_type='cls')
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
