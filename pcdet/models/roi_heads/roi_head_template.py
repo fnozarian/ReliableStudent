@@ -418,13 +418,17 @@ class RoIHeadTemplate(nn.Module):
 
     def pre_loss_filtering(self):
 
+        unlabeled_inds = self.forward_ret_dict['unlabeled_inds']
         rcnn_cls_labels = self.forward_ret_dict['rcnn_cls_labels'].clone().detach()
-        rcnn_cls = torch.sigmoid(self.forward_ret_dict['rcnn_cls'].clone().detach()).view_as(rcnn_cls_labels)
+        rcnn_cls_scores = torch.sigmoid(self.forward_ret_dict['rcnn_cls'].clone().detach()).view_as(rcnn_cls_labels)
+        rcnn_cls_labels_unlabeled = rcnn_cls_labels[unlabeled_inds]
+        rcnn_cls_scores_unlabeled = rcnn_cls_scores[unlabeled_inds]
+
         pred_thresh = self.model_cfg.get('CONSISTENCY_PRE_LOSS_CLS_PRED_FILTERING_THRESH', [0.9])
         label_thresh = self.model_cfg.get('CONSISTENCY_PRE_LOSS_CLS_LABEL_FILTERING_THRESH', [0.9])
         # TODO(farzad) make thresholds classwise
-        filtering_mask = (rcnn_cls > pred_thresh[0]) & (rcnn_cls_labels > label_thresh[0])
-        self.forward_ret_dict['reg_valid_mask'] &= filtering_mask
+        filtering_mask = (rcnn_cls_scores_unlabeled > pred_thresh[0]) & (rcnn_cls_labels_unlabeled > label_thresh[0])
+        self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] &= filtering_mask
 
         # TODO(farzad) we can also filter rcnn_cls_labels
 
