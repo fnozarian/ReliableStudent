@@ -9,10 +9,14 @@ if os.name == 'posix' and "DISPLAY" not in os.environ:
     vis_dir.mkdir(parents=True, exist_ok=True)
     """ Following will create a virtual display, Install pyvirtualdisplay using <pip install pyvirtualdisplay> """
     from pyvirtualdisplay import Display
-    display = Display(visible=0, size=(1920, 1080))
-    display.start()
-    import mayavi.mlab as mlab
-    mlab.options.offscreen = True
+
+    try:
+        display = Display(visible=0, size=(1920, 1080))
+        display.start()
+        import mayavi.mlab as mlab
+        mlab.options.offscreen = True
+    except: 
+        pass
 
 else:
     import mayavi.mlab as mlab
