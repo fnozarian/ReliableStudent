@@ -154,7 +154,7 @@ class PredQualityMetrics(Metric):
             results = {}
             for mname in self.metrics_name:
                 mstate = getattr(self, mname)
-                results[mname] = torch.stack(mstate, dim=0).nanmean(dim=0)
+                results[mname] = nanmean(torch.stack(mstate, dim=0), dim=0)  # torch.nanmean is not available in pytorch < 1.8
 
             for key, val in results.items():
                 classwise_results = {}
@@ -346,6 +346,34 @@ class KITTIEvalMetrics(Metric):
 
         return final_results
 
+# https://github.com/pytorch/pytorch/issues/21987#issuecomment-813859270
+def nanmean(v: torch.Tensor, *args, allnan=np.nan, **kwargs) -> torch.Tensor:
+    """
+    :param v: tensor to take mean
+    :param dim: dimension(s) over which to take the mean
+    :param allnan: value to use in case all values averaged are NaN.
+        Defaults to np.nan, consistent with np.nanmean.
+    :return: mean.
+    """
+    def isnan(v):
+        if v.dtype is torch.long:
+            return v == torch.tensor(np.nan).long()
+        else:
+            return torch.isnan(v)
+    v = v.clone()
+    is_nan = isnan(v)
+    v[is_nan] = 0
+
+    if np.isnan(allnan):
+        return v.sum(*args, **kwargs) / (~is_nan).float().sum(*args, **kwargs)
+    else:
+        sum_nonnan = v.sum(*args, **kwargs)
+        n_nonnan = float(~is_nan).sum(*args, **kwargs)
+        mean_nonnan = torch.zeros_like(sum_nonnan) + allnan
+        any_nonnan = n_nonnan > 1
+        mean_nonnan[any_nonnan] = (
+                sum_nonnan[any_nonnan] / n_nonnan[any_nonnan])
+        return mean_nonnan
 
 def eval_class(gt_annos,
                dt_annos,
