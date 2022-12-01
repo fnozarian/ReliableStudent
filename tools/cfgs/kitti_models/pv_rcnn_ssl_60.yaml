@@ -180,7 +180,7 @@ MODEL:
                 NMS_TYPE: nms_gpu
                 MULTI_CLASSES_NMS: False
                 NMS_PRE_MAXSIZE: 1024
-                NMS_POST_MAXSIZE: 100
+                NMS_POST_MAXSIZE: 128
                 NMS_THRESH: 0.7
 
         ROI_GRID_POOL:
@@ -204,7 +204,7 @@ MODEL:
             HARD_BG_RATIO: 0.8
 
             REG_FG_THRESH: 0.55
-            UNLABELED_SAMPLER_TYPE: gt_scores_sampler
+            UNLABELED_SAMPLER_TYPE: None
             UNLABELED_REG_FG_THRESH: 0.7
 
         LOSS_CONFIG:

@@ -420,16 +420,26 @@ class RoIHeadTemplate(nn.Module):
 
         unlabeled_inds = self.forward_ret_dict['unlabeled_inds']
         rcnn_cls_labels = self.forward_ret_dict['rcnn_cls_labels'].clone().detach()
-        rcnn_cls_scores = torch.sigmoid(self.forward_ret_dict['rcnn_cls'].clone().detach()).view_as(rcnn_cls_labels)
-        rcnn_cls_labels_unlabeled = rcnn_cls_labels[unlabeled_inds]
-        rcnn_cls_scores_unlabeled = rcnn_cls_scores[unlabeled_inds]
+        rcnn_cls_preds = self.forward_ret_dict['rcnn_cls'].view_as(rcnn_cls_labels).clone().detach()
+        rcnn_cls_labels = rcnn_cls_labels[unlabeled_inds]
+        rcnn_cls_preds = torch.sigmoid(rcnn_cls_preds)[unlabeled_inds]
 
+        # ----------- REG_VALID_MASK -----------
+        reg_valid_mask = (rcnn_cls_labels > self.model_cfg.TARGET_CONFIG.UNLABELED_REG_FG_THRESH).long()
         pred_thresh = self.model_cfg.get('CONSISTENCY_PRE_LOSS_CLS_PRED_FILTERING_THRESH', [0.9])
         label_thresh = self.model_cfg.get('CONSISTENCY_PRE_LOSS_CLS_LABEL_FILTERING_THRESH', [0.9])
         # TODO(farzad) make thresholds classwise
-        filtering_mask = (rcnn_cls_scores_unlabeled > pred_thresh[0]) & (rcnn_cls_labels_unlabeled > label_thresh[0])
-        self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] &= filtering_mask
+        filtering_mask = (rcnn_cls_preds > pred_thresh[0]) & (rcnn_cls_labels > label_thresh[0])
+        self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] = reg_valid_mask & filtering_mask
 
+        # ----------- RCNN_CLS_LABELS -----------
+        fg_mask = rcnn_cls_labels > self.model_cfg.TARGET_CONFIG.CLS_FG_THRESH
+        bg_mask = rcnn_cls_labels < self.model_cfg.TARGET_CONFIG.CLS_BG_THRESH
+        ignore_mask = torch.eq(self.forward_ret_dict['gt_of_rois'][unlabeled_inds], 0).all(dim=-1)
+        rcnn_cls_labels[fg_mask] = 1
+        rcnn_cls_labels[bg_mask] = 0
+        rcnn_cls_labels[ignore_mask] = -1
+        self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] = rcnn_cls_labels
         # TODO(farzad) we can also filter rcnn_cls_labels
 
     def get_loss(self, tb_dict=None, scalar=True):

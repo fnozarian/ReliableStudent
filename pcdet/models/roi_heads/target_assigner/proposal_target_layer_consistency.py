@@ -50,6 +50,7 @@ class ProposalTargetLayerConsistency(nn.Module):
         # gt_scores_var = batch_dict['pred_scores_ema_var']
         # gt_boxes_var = batch_dict['pred_boxes_ema_var']
         # gt_pred_iou = batch_dict['pred_ious_ema']
+        assert self.roi_sampler_cfg.ROI_PER_IMAGE <= batch_dict['gt_boxes'].shape[1]
 
         batch_size = batch_dict['batch_size']
         rois = batch_dict['rois']
@@ -71,8 +72,15 @@ class ProposalTargetLayerConsistency(nn.Module):
             cur_gt_boxes = cur_gt_boxes[:k + 1]
             cur_gt_boxes = cur_gt_boxes.new_zeros((1, cur_gt_boxes.shape[1])) if len(cur_gt_boxes) == 0 else cur_gt_boxes
             if index in batch_dict['unlabeled_inds']:
-                subsample_unlabeled_rois = getattr(self, self.roi_sampler_cfg.UNLABELED_SAMPLER_TYPE)
-                sampled_inds, cur_reg_valid_mask, cur_cls_labels = subsample_unlabeled_rois(batch_dict, index)
+                subsample_unlabeled_rois = getattr(self, self.roi_sampler_cfg.UNLABELED_SAMPLER_TYPE, None)
+                if subsample_unlabeled_rois is None:
+                    # Let's simply pick top-k rois (wrt PL scores) and postpone setting rcnn cls/reg masks to pre_loss_filtering
+                    pred_scores_ema = batch_dict['pred_scores_ema'][index]
+                    _, sampled_inds = torch.topk(pred_scores_ema, k=self.roi_sampler_cfg.ROI_PER_IMAGE)
+                    cur_reg_valid_mask = torch.ones_like(sampled_inds, dtype=torch.int)
+                    cur_cls_labels = pred_scores_ema[sampled_inds]
+                else:
+                    sampled_inds, cur_reg_valid_mask, cur_cls_labels = subsample_unlabeled_rois(batch_dict, index)
 
                 cur_roi = batch_dict['rois_ema'][index][sampled_inds]
                 cur_roi_scores = batch_dict['roi_scores_ema'][index][sampled_inds]
