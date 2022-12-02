@@ -426,9 +426,8 @@ class RoIHeadTemplate(nn.Module):
 
         # ----------- REG_VALID_MASK -----------
         reg_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_REG_FG_THRESH
-        reg_valid_mask = (rcnn_cls_labels > reg_fg_thresh).long()
         filtering_mask = (rcnn_cls_preds > reg_fg_thresh) & (rcnn_cls_labels > reg_fg_thresh)
-        self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] = reg_valid_mask & filtering_mask
+        self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] = filtering_mask.long()
 
         # ----------- RCNN_CLS_LABELS -----------
         fg_mask = rcnn_cls_labels > self.model_cfg.TARGET_CONFIG.UNLABELED_CLS_FG_THRESH
