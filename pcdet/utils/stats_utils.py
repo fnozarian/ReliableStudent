@@ -93,52 +93,57 @@ class PredQualityMetrics(Metric):
                 gt_cls_mask = gt_cls_agnostic_mask if cind == num_classes else valid_gt_boxes[:, -1] == cind
                 classwise_metrics['num_pred_boxes'][cind] = pred_cls_mask.sum()
                 classwise_metrics['num_gt_boxes'][cind] = gt_cls_mask.sum()
+                
+                #classwise masking of pred/gt boxes 
+                valid_cls_pred_boxes = valid_pred_boxes[pred_cls_mask.bool()]
+                valid_cls_gt_boxes = valid_gt_boxes[gt_cls_mask.bool()]
+                num_cls_preds = pred_cls_mask.sum()
+                num_cls_gts = gt_cls_mask.sum()
 
-                if num_gts > 0 and num_preds > 0:
-                    overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
+                if num_cls_gts > 0 and num_cls_preds > 0:
+                    overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_cls_pred_boxes[:, 0:7], valid_cls_gt_boxes[:, 0:7])
                     preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
-                    classwise_metrics['pred_ious'][cind] = (preds_iou_max * pred_cls_mask.float()).sum() / pred_cls_mask.sum()
+                    classwise_metrics['pred_ious'][cind] = preds_iou_max.mean()
 
                     # Using kitti test class-wise fg threshold instead of thresholds used during train.
-                    classwise_fg_thresh = pred_labels.new_tensor(self.min_overlaps).unsqueeze(dim=0).repeat(pred_labels.shape[0], 1)
-                    fg_thresh = classwise_fg_thresh.gather(dim=-1, index=pred_labels.unsqueeze(dim=-1).long()).squeeze()
+                    classwise_fg_thresh = pred_labels.new_tensor(self.min_overlaps).unsqueeze(dim=0).repeat(pred_labels[pred_cls_mask].shape[0], 1)
+                    fg_thresh = classwise_fg_thresh.gather(dim=-1, index=pred_labels[pred_cls_mask].unsqueeze(dim=-1).long()).squeeze()
                     fg_mask = preds_iou_max > fg_thresh
-                    classwise_metrics['pred_fgs'][cind] = (fg_mask & pred_cls_mask).sum() / pred_cls_mask.sum()
+                    classwise_metrics['pred_fgs'][cind] = fg_mask.float().mean()
 
-                    assigned_gt_cls_agnostic_mask = valid_gt_boxes.new_ones(assigned_gt_inds.shape[0], dtype=torch.bool)
-                    assigned_gt_cls_mask = assigned_gt_cls_agnostic_mask if cind == num_classes else valid_gt_boxes[assigned_gt_inds, -1] == cind
-                    correct_mask = pred_cls_mask & assigned_gt_cls_mask
-                    classwise_metrics['pred_accs'][cind] = correct_mask.sum() / assigned_gt_cls_mask.sum()
+                    #! TODO (shashank) : How to handle classwise pred_accs when pred/gt boxes fed to IoU are belonging to only one class at a time?
+                    # Thats why, currently only class agnostic pred_accs is being computed. 
+                    if cind == num_classes:
+                        assigned_gt_cls_agnostic_mask = valid_gt_boxes.new_ones(assigned_gt_inds.shape[0], dtype=torch.bool)
+                        correct_mask = pred_cls_mask & assigned_gt_cls_agnostic_mask
+                        classwise_metrics['pred_accs'][cind] = correct_mask.sum() / assigned_gt_cls_agnostic_mask.sum()
 
-                    bg_maks = preds_iou_max < self.cls_bg_thresh
+                    bg_mask = preds_iou_max < self.cls_bg_thresh
 
-                    cls_score_fg = (valid_pred_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
-                                   / (fg_mask & pred_cls_mask).sum()
+                    cls_score_fg = (valid_pred_scores.squeeze()[pred_cls_mask] * fg_mask.float()).sum() / fg_mask.sum()
                     classwise_metrics['score_fgs'][cind] = cls_score_fg
 
-                    cls_score_bg = (valid_pred_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
-                                   / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
+                    cls_score_bg = (valid_pred_scores.squeeze()[pred_cls_mask] * bg_mask.float()).sum() \
+                                    / torch.clamp(bg_mask.sum(), min=1.0)
                     classwise_metrics['score_bgs'][cind] = cls_score_bg
 
                     # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
                     # while without clamp it is N/A, which makes more sense.
                     if valid_roi_scores is not None:
-                        cls_sem_score_fg = (valid_roi_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
-                                           / (fg_mask & pred_cls_mask).sum()
+                        cls_sem_score_fg = (valid_roi_scores.squeeze()[pred_cls_mask] * fg_mask.float()).sum() / fg_mask.sum()
                         classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
 
-                        cls_sem_score_bg = (valid_roi_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
-                                           / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
+                        cls_sem_score_bg = (valid_roi_scores.squeeze()[pred_cls_mask] * bg_mask.float()).sum() \
+                                            / torch.clamp(bg_mask.sum(), min=1.0)
                         classwise_metrics['sem_score_bgs'][cind] = cls_sem_score_bg
 
                     if valid_target_scores is not None:
-                        cls_target_score_fg = (valid_target_scores.squeeze() * fg_mask.float() * pred_cls_mask.float()).sum() \
-                                              / (fg_mask & pred_cls_mask).sum()
+                        cls_target_score_fg = (valid_target_scores.squeeze()[pred_cls_mask] * fg_mask.float()).sum() / fg_mask.sum()
                         classwise_metrics['target_score_fg'][cind] = cls_target_score_fg
 
-                        cls_target_score_bg = (valid_target_scores.squeeze() * bg_maks.float() * pred_cls_mask.float()).sum() \
-                                              / torch.clamp((bg_maks & pred_cls_mask).float().sum(), min=1.0)
-                        classwise_metrics['target_score_bg'][cind] = cls_target_score_bg
+                        cls_target_score_bg = (valid_target_scores.squeeze()[pred_cls_mask] * bg_mask.float()).sum() \
+                                                / torch.clamp(bg_mask.sum(), min=1.0)
+                        classwise_metrics['target_score_bg'][cind] = cls_target_score_bg     
 
             for key, val in classwise_metrics.items():
                 getattr(self, key).append(val)
