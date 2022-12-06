@@ -34,7 +34,7 @@ class ProposalTargetLayer(nn.Module):
         )
         # regression valid mask
         reg_valid_mask = (batch_roi_ious > self.roi_sampler_cfg.REG_FG_THRESH).long()
-
+        interval_mask = None
         # classification label
         if self.roi_sampler_cfg.CLS_SCORE_TYPE == 'cls':
             batch_cls_labels = (batch_roi_ious > self.roi_sampler_cfg.CLS_FG_THRESH).long()
@@ -59,7 +59,8 @@ class ProposalTargetLayer(nn.Module):
         targets_dict = {'rois': batch_rois, 'gt_of_rois': batch_gt_of_rois, 'gt_iou_of_rois': batch_roi_ious,
                         'roi_scores': batch_roi_scores, 'roi_labels': batch_roi_labels,
                         'reg_valid_mask': reg_valid_mask,
-                        'rcnn_cls_labels': batch_cls_labels}
+                        'rcnn_cls_labels': batch_cls_labels,
+                        'interval_mask': interval_mask}
 
         return targets_dict
 
