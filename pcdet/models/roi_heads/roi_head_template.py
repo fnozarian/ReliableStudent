@@ -400,11 +400,11 @@ class RoIHeadTemplate(nn.Module):
                         rcnn_cls_score_teacher = forward_ret_dict['rcnn_cls_score_teacher']
                         rcnn_cls_score_teacher = 1 - rcnn_cls_score_teacher  # represents the bg score
                         interval_mask = forward_ret_dict['interval_mask']
-                        unlabeled_inds = forward_ret_dict['unlabeled_mask']
+                        unlabeled_inds = forward_ret_dict['unlabeled_inds']
                         unlabeled_mask = torch.zeros_like(interval_mask).index_fill_(0, unlabeled_inds, 1)
                         labeled_mask = ~unlabeled_mask
                         unlabeled_interval_mask = unlabeled_mask * interval_mask
-
+                        # TODO(farzad) refactor this to only weight the unlabeled rois. Labeled rois are always
                         if self.model_cfg['LOSS_CONFIG']['UL_INTERVAL_ROI_IOU_SCORE_TYPE'] == 'all':
                             # Assign teacher's rcnn cls weight only to interval rcnn roi's of the student and 1 to the rest
                             # This provides higher supervision from unlabeled data since the loss of all

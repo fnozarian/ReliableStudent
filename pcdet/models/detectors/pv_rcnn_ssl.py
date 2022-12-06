@@ -329,8 +329,8 @@ class PVRCNN_SSL(Detector3DTemplate):
             if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
                 # using teacher to evaluate student's bg/fg proposals through its rcnn head
                 with torch.no_grad():
-                    # batch_dict_std = copy.deepcopy(batch_dict) # doesn't work
                     batch_dict_std = {}
+                    batch_dict_std['unlabeled_inds'] = batch_dict['unlabeled_inds']
                     batch_dict_std['rois'] = batch_dict['rois'].data.clone()
                     batch_dict_std['roi_scores'] = batch_dict['roi_scores'].data.clone()
                     batch_dict_std['roi_labels'] = batch_dict['roi_labels'].data.clone()
@@ -354,13 +354,13 @@ class PVRCNN_SSL(Detector3DTemplate):
                                                       disable_gt_roi_when_pseudo_labeling=True)
 
                     pred_dicts_std, recall_dicts_std = self.pv_rcnn_ema.post_processing(batch_dict_std,
-                                                                                no_recall_dict=True, no_nms=True)
-                    all_samples = []
-                    for pred_dict in pred_dicts_std:
-                        all_samples.append(pred_dict['pred_scores'].unsqueeze(dim=0))
-                    pred_scores_teacher = torch.cat(all_samples, dim=0)
-                    self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = pred_scores_teacher.data.clone()
-                    self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_mask'] = unlabeled_inds
+                                                                                        no_recall_dict=True,
+                                                                                        no_nms_for_unlabeled=True)
+                    rcnn_cls_score_teacher = -torch.ones_like(self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_labels'])
+                    for uind in unlabeled_inds:
+                        rcnn_cls_score_teacher[uind] = pred_dicts_std[uind]['pred_scores']
+                    self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = rcnn_cls_score_teacher
+                    self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_inds'] = unlabeled_inds
 
             disp_dict = {}
             loss_rpn_cls, loss_rpn_box, tb_dict = self.pv_rcnn.dense_head.get_loss(scalar=False)
