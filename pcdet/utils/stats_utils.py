@@ -153,7 +153,7 @@ class PredQualityMetrics(Metric):
 
     def compute(self):
         final_results = {}
-        if len(self.pred_ious) % self.reset_state_interval == 0:
+        if len(self.pred_ious) >= self.reset_state_interval:
             results = {}
             for mname in self.metrics_name:
                 mstate = getattr(self, mname)
@@ -246,7 +246,7 @@ class KITTIEvalMetrics(Metric):
 
     def compute(self):
         final_results = {}
-        if (len(self.detections) % self.reset_state_interval == 0) and cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
+        if (len(self.detections) >= self.reset_state_interval) and cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
             # eval_class() takes ~45ms for each sample and linearly increasing
             # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
             kitti_eval_metrics = eval_class(self.groundtruths, self.detections, self.current_classes,
