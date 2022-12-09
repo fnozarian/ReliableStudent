@@ -417,6 +417,11 @@ class RoIHeadTemplate(nn.Module):
                             # and 0 to the rest unlabeled rois.
                             # This provides only supervision from interval rois of unlabeled samples + labeled data.
                             weight = labeled_mask.float() + (unlabeled_interval_mask.float() * rcnn_cls_score_teacher)
+                        elif self.model_cfg['LOSS_CONFIG']['UL_INTERVAL_ROI_IOU_SCORE_TYPE'] == 'bg':
+                            bg_mask = forward_ret_dict['rcnn_cls_labels'] == 0
+                            bg_mask_unlabeled = bg_mask & unlabeled_mask
+                            ones = torch.ones_like(forward_ret_dict['rcnn_cls_labels'])
+                            weight = torch.where(bg_mask_unlabeled, rcnn_cls_score_teacher, ones)
                         else:
                             raise ValueError
 
