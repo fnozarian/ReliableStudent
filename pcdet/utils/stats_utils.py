@@ -30,7 +30,7 @@ class PredQualityMetrics(Metric):
         self.reset_state_interval = kwargs.get('reset_state_interval', 32)
         self.tag = kwargs.get('tag', None)
         self.dataset = kwargs.get('dataset', None)
-        self.cls_bg_thresh = kwargs.get('cls_bg_thresh', None)
+        self.cls_bg_thresh = kwargs.get('cls_bg_thresh',  0.25)
         self.metrics_name = ["pred_ious", "pred_accs", "pred_fgs", "sem_score_fgs", "sem_score_bgs", "score_fgs",
                              "score_bgs", "target_score_fg", "target_score_bg", "num_pred_boxes", "num_gt_boxes"]
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
@@ -144,7 +144,8 @@ class PredQualityMetrics(Metric):
                         classwise_metrics['target_score_bg'][cind] = cls_target_score_bg
 
             for key, val in classwise_metrics.items():
-                getattr(self, key).append(val)
+                # Note that unsqueeze is necessary because torchmetric performs the dist cat on dim 0.
+                getattr(self, key).append(val.unsqueeze(dim=0))
 
         # If no prediction is given all states are filled with nan tensors
         if len(preds) == 0:
@@ -157,7 +158,9 @@ class PredQualityMetrics(Metric):
             results = {}
             for mname in self.metrics_name:
                 mstate = getattr(self, mname)
-                results[mname] = nanmean(torch.stack(mstate, dim=0), dim=0)  # torch.nanmean is not available in pytorch < 1.8
+                if isinstance(mstate, torch.Tensor):
+                    mstate = [mstate]
+                results[mname] = nanmean(torch.cat(mstate, dim=0), dim=0)  # torch.nanmean is not available in pytorch < 1.8
 
             for key, val in results.items():
                 classwise_results = {}
