@@ -340,26 +340,23 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict_std['point_coords'] = batch_dict_ema['point_coords'].data.clone()
                     batch_dict_std['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
 
-                    # reverse student's augmentation of rois
-                    batch_dict_std['rois'][unlabeled_inds] = global_scaling_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['scale'][unlabeled_inds])
-                    batch_dict_std['rois'][unlabeled_inds] = global_rotation_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['rot_angle'][unlabeled_inds])
-                    batch_dict_std['rois'][unlabeled_inds] = random_flip_along_y_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['flip_y'][unlabeled_inds])
-                    batch_dict_std['rois'][unlabeled_inds] = random_flip_along_x_bbox(
-                        batch_dict_std['rois'][unlabeled_inds], batch_dict['flip_x'][unlabeled_inds])
+                    batch_dict_std = self.reverse_augmentation(batch_dict_std, batch_dict, unlabeled_inds)
 
                     self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
                                                       disable_gt_roi_when_pseudo_labeling=True)
+                    batch_dict_std = self.apply_augmentation(batch_dict_std, batch_dict, unlabeled_inds, key='batch_box_preds')
 
                     pred_dicts_std, recall_dicts_std = self.pv_rcnn_ema.post_processing(batch_dict_std,
                                                                                         no_recall_dict=True,
                                                                                         no_nms_for_unlabeled=True)
                     rcnn_cls_score_teacher = -torch.ones_like(self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_labels'])
+                    batch_box_preds_teacher = torch.zeros_like(self.pv_rcnn.roi_head.forward_ret_dict['batch_box_preds'])
                     for uind in unlabeled_inds:
                         rcnn_cls_score_teacher[uind] = pred_dicts_std[uind]['pred_scores']
+                        batch_box_preds_teacher[uind] = pred_dicts_std[uind]['pred_boxes']
                     self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = rcnn_cls_score_teacher
+                    # For metrics
+                    self.pv_rcnn.roi_head.forward_ret_dict['batch_box_preds_teacher'] = batch_box_preds_teacher
                     self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_inds'] = unlabeled_inds
 
             disp_dict = {}
@@ -628,7 +625,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 new_boxes[unlabeled_inds[i]] = pseudo_box
             batch_dict[key] = new_boxes
 
-    def apply_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key = 'rois'):
+    def apply_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key='rois'):
         batch_dict[key][unlabeled_inds] = random_flip_along_x_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
         batch_dict[key][unlabeled_inds] = random_flip_along_y_bbox(
@@ -644,15 +641,20 @@ class PVRCNN_SSL(Detector3DTemplate):
 
         return batch_dict
 
-    def reverse_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key = 'rois'):
+    def reverse_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key='rois'):
         batch_dict[key][unlabeled_inds] = global_scaling_bbox(
-            batch_dict[key][unlabeled_inds], batch_dict_org['scale'][unlabeled_inds])
+            batch_dict[key][unlabeled_inds], 1.0 / batch_dict_org['scale'][unlabeled_inds])
         batch_dict[key][unlabeled_inds] = global_rotation_bbox(
-            batch_dict[key][unlabeled_inds], batch_dict_org['rot_angle'][unlabeled_inds])
+            batch_dict[key][unlabeled_inds], - batch_dict_org['rot_angle'][unlabeled_inds])
         batch_dict[key][unlabeled_inds] = random_flip_along_y_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['flip_y'][unlabeled_inds])
         batch_dict[key][unlabeled_inds] = random_flip_along_x_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
+
+        batch_dict[key][unlabeled_inds, :, 6] = common_utils.limit_period(
+            batch_dict[key][unlabeled_inds, :, 6], offset=0.5, period=2 * np.pi
+        )
+
         return batch_dict
 
     def get_supervised_training_loss(self):

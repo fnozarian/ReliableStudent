@@ -185,7 +185,7 @@ class RoIHeadTemplate(nn.Module):
             targets_dict['gt_of_rois_var'][unlabeled_inds, :num_rois_ema, :-1] = batch_dict['pred_boxes_ema_var'][
                 unlabeled_inds]
 
-    def update_metrics(self, targets_dict, mask_type='reg', pred_type='pred'):
+    def update_metrics(self, targets_dict, mask_type='reg', pred_type='pred', update_ema=False):
         metric_registry = targets_dict['metric_registry']
         tag = f'rcnn_{pred_type}_metrics_{mask_type}'
         metrics = metric_registry.get(tag)
@@ -233,6 +233,9 @@ class RoIHeadTemplate(nn.Module):
                 elif pred_type == 'pred':
                     vis_pred_boxes = pred_boxes
                     vis_pred_scores = pred_scores
+                elif pred_type == 'ema':
+                    vis_pred_boxes = targets_dict['batch_box_preds_teacher'][uind][mask].detach().clone()
+                    vis_pred_scores = targets_dict['rcnn_cls_score_teacher'][uind][mask].detach().clone()
                 else:
                     raise ValueError(pred_type)
 
@@ -243,6 +246,11 @@ class RoIHeadTemplate(nn.Module):
         metric_inputs = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois, 'roi_scores': sample_roi_scores,
                          'ground_truths': sample_gts, 'targets': sample_targets, 'target_scores': sample_target_scores}
         metrics.update(**metric_inputs)
+
+        if update_ema:
+            metrics_ema = metric_registry.get(tag + "_ema")
+            metric_inputs_ema = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'ground_truths': sample_gts}
+            metrics_ema.update(**metric_inputs_ema)
 
     def assign_targets(self, batch_dict):
 
@@ -480,7 +488,7 @@ class RoIHeadTemplate(nn.Module):
             self.pre_loss_filtering()
 
         # self.update_metrics(self.forward_ret_dict, mask_type='reg')
-        self.update_metrics(self.forward_ret_dict, mask_type='cls')
+        self.update_metrics(self.forward_ret_dict, mask_type='cls', update_ema=True)
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)
