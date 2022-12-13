@@ -191,7 +191,11 @@ class RoIHeadTemplate(nn.Module):
         metrics = metric_registry.get(tag)
         unlabeled_inds = targets_dict['unlabeled_inds']
 
-        sample_preds, sample_pred_scores, sample_gts, sample_rois, sample_roi_scores, sample_targets, sample_target_scores = [], [], [], [], [], [], []
+        sample_preds, sample_pred_scores = [], []
+        sample_rois, sample_roi_scores = [], []
+        sample_targets, sample_target_scores = [], []
+        ema_preds_of_std_rois, ema_pred_scores_of_std_rois = [], []
+        sample_gts = []
         for i, uind in enumerate(unlabeled_inds):
             mask = (targets_dict['reg_valid_mask'][uind] > 0) if mask_type == 'reg' else (
                         targets_dict['rcnn_cls_labels'][uind] >= 0)
@@ -221,6 +225,13 @@ class RoIHeadTemplate(nn.Module):
             gt_labeled_boxes = targets_dict['ori_unlabeled_boxes'][i]
             sample_gts.append(gt_labeled_boxes)
 
+            # Teacher refinements (Preds) of student's rois
+            pred_boxes_ema = targets_dict['batch_box_preds_teacher'][uind][mask].detach().clone()
+            pred_labeled_boxes_ema = torch.cat([pred_boxes_ema, roi_labels], dim=-1)
+            pred_scores_ema = targets_dict['rcnn_cls_score_teacher'][uind][mask].detach().clone()
+            ema_preds_of_std_rois.append(pred_labeled_boxes_ema)
+            ema_pred_scores_of_std_rois.append(pred_scores_ema)
+
             if self.model_cfg.get('ENABLE_VIS', False):
                 points_mask = targets_dict['points'][:, 0] == uind
                 points = targets_dict['points'][points_mask, 1:]
@@ -249,7 +260,7 @@ class RoIHeadTemplate(nn.Module):
 
         if update_ema:
             metrics_ema = metric_registry.get(tag + "_ema")
-            metric_inputs_ema = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'ground_truths': sample_gts}
+            metric_inputs_ema = {'preds': ema_preds_of_std_rois, 'pred_scores': ema_pred_scores_of_std_rois, 'ground_truths': sample_gts}
             metrics_ema.update(**metric_inputs_ema)
 
     def assign_targets(self, batch_dict):
