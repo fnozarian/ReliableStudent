@@ -185,7 +185,7 @@ class RoIHeadTemplate(nn.Module):
             targets_dict['gt_of_rois_var'][unlabeled_inds, :num_rois_ema, :-1] = batch_dict['pred_boxes_ema_var'][
                 unlabeled_inds]
 
-    def update_metrics(self, targets_dict, mask_type='reg', pred_type='pred', update_ema=False):
+    def update_metrics(self, targets_dict, mask_type='reg', pred_type='pred', update_roi_pl=False, update_ema=False):
         metric_registry = targets_dict['metric_registry']
         tag = f'rcnn_{pred_type}_metrics_{mask_type}'
         metrics = metric_registry.get(tag)
@@ -262,6 +262,10 @@ class RoIHeadTemplate(nn.Module):
             metrics_ema = metric_registry.get(tag + "_ema")
             metric_inputs_ema = {'preds': ema_preds_of_std_rois, 'pred_scores': ema_pred_scores_of_std_rois, 'ground_truths': sample_gts}
             metrics_ema.update(**metric_inputs_ema)
+        if update_roi_pl:
+            metrics_roi_pl = metric_registry.get(tag + "_roi_pl")
+            metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores, 'ground_truths': sample_targets}
+            metrics_roi_pl.update(**metric_inputs_roi_pl)
 
     def assign_targets(self, batch_dict):
 
@@ -501,7 +505,7 @@ class RoIHeadTemplate(nn.Module):
             self.pre_loss_filtering()
 
         # self.update_metrics(self.forward_ret_dict, mask_type='reg')
-        self.update_metrics(self.forward_ret_dict, mask_type='cls', update_ema=True)
+        self.update_metrics(self.forward_ret_dict, mask_type='cls', update_roi_pl=True, update_ema=False)
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)
