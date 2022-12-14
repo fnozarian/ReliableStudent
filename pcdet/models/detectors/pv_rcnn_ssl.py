@@ -225,63 +225,63 @@ class PVRCNN_SSL(Detector3DTemplate):
                                                                                     override_thresh=0.0,
                                                                                     no_nms_for_unlabeled=self.no_nms)
 
-                # Used for calc stats before and after filtering
-                ori_unlabeled_boxes = batch_dict['gt_boxes'][unlabeled_inds, ...]
+            # Used for calc stats before and after filtering
+            ori_unlabeled_boxes = batch_dict['gt_boxes'][unlabeled_inds, ...]
 
-                ''' 
-                Recording PL vs GT statistics BEFORE filtering 
-                TODO (shashank) : Needs to be refactored (can also be made into a single function call)
-                '''
-                ################################
-                # pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores, _, _ = self._unpack_predictions(pred_dicts_ens, unlabeled_inds)
-                # pseudo_boxes = [torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1) \
-                #     for (pseudo_box, pseudo_label) in zip(pseudo_boxes, pseudo_labels)]
-                #
-                # # Making consistent # of pseudo boxes in each batch
-                # # NOTE: Need to store them in batch_dict in a new key, which can be removed later
-                # batch_dict['pseudo_boxes_prefilter'] = torch.zeros_like(batch_dict['gt_boxes'])
-                # self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds, key='pseudo_boxes_prefilter')
-                #
-                # # apply student's augs on teacher's pseudo-boxes (w/o filtered)
-                # batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='pseudo_boxes_prefilter')
-                #
-                # metric_inputs = {'preds': batch_dict['pseudo_boxes_prefilter'][unlabeled_inds],
-                #                  'targets': ori_unlabeled_boxes,
-                #                  'pred_scores': pseudo_scores,
-                #                  'pred_sem_scores': pseudo_sem_scores}
-                #
-                # self.metrics['before_filtering'].update(**metric_inputs)
-                # batch_dict.pop('pseudo_boxes_prefilter')
-                ################################
-                pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
-                    self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
+            ''' 
+            Recording PL vs GT statistics BEFORE filtering 
+            TODO (shashank) : Needs to be refactored (can also be made into a single function call)
+            '''
+            ################################
+            # pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores, _, _ = self._unpack_predictions(pred_dicts_ens, unlabeled_inds)
+            # pseudo_boxes = [torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1) \
+            #     for (pseudo_box, pseudo_label) in zip(pseudo_boxes, pseudo_labels)]
+            #
+            # # Making consistent # of pseudo boxes in each batch
+            # # NOTE: Need to store them in batch_dict in a new key, which can be removed later
+            # batch_dict['pseudo_boxes_prefilter'] = torch.zeros_like(batch_dict['gt_boxes'])
+            # self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds, key='pseudo_boxes_prefilter')
+            #
+            # # apply student's augs on teacher's pseudo-boxes (w/o filtered)
+            # batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='pseudo_boxes_prefilter')
+            #
+            # metric_inputs = {'preds': batch_dict['pseudo_boxes_prefilter'][unlabeled_inds],
+            #                  'targets': ori_unlabeled_boxes,
+            #                  'pred_scores': pseudo_scores,
+            #                  'pred_sem_scores': pseudo_sem_scores}
+            #
+            # self.metrics['before_filtering'].update(**metric_inputs)
+            # batch_dict.pop('pseudo_boxes_prefilter')
+            ################################
+            pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
+                self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
 
-                self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
+            self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
 
-                # apply student's augs on teacher's pseudo-labels (filtered) only (not points)
-                batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
+            # apply student's augs on teacher's pseudo-labels (filtered) only (not points)
+            batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
 
-                # if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
-                #     for i, uind in enumerate(unlabeled_inds):
-                #         mask = batch_dict['points'][:, 0] == uind
-                #         point = batch_dict['points'][mask, 1:]
-                #         pred_boxes = batch_dict['gt_boxes'][uind][:, :-1]
-                #         pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
-                #         pred_scores = torch.zeros_like(pred_labels).float()
-                #         pred_scores[:pseudo_scores[i].shape[0]] = pseudo_scores[i]
-                #         V.vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1],
-                #             pred_boxes=pred_boxes, pred_scores=pred_scores, pred_labels=pred_labels)
+            # if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
+            #     for i, uind in enumerate(unlabeled_inds):
+            #         mask = batch_dict['points'][:, 0] == uind
+            #         point = batch_dict['points'][mask, 1:]
+            #         pred_boxes = batch_dict['gt_boxes'][uind][:, :-1]
+            #         pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
+            #         pred_scores = torch.zeros_like(pred_labels).float()
+            #         pred_scores[:pseudo_scores[i].shape[0]] = pseudo_scores[i]
+            #         V.vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1],
+            #             pred_boxes=pred_boxes, pred_scores=pred_scores, pred_labels=pred_labels)
 
-                # ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
-                # pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
-                # metric_inputs = {'preds': pseudo_boxes_list,
-                #                  'targets': ori_unlabeled_boxes_list,
-                #                  'pred_scores': pseudo_scores,
-                #                  'pred_sem_scores': pseudo_sem_scores}
-                # self.metrics['after_filtering'].update(**metric_inputs)  # commented to reduce complexity.
+            # ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
+            # pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
+            # metric_inputs = {'preds': pseudo_boxes_list,
+            #                  'targets': ori_unlabeled_boxes_list,
+            #                  'pred_scores': pseudo_scores,
+            #                  'pred_sem_scores': pseudo_sem_scores}
+            # self.metrics['after_filtering'].update(**metric_inputs)  # commented to reduce complexity.
 
-                batch_dict['metric_registry'] = self.metric_registry
-                batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
+            batch_dict['metric_registry'] = self.metric_registry
+            batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
             for cur_module in self.pv_rcnn.module_list:
                 if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
                     # Pass teacher's proposal to the student.
