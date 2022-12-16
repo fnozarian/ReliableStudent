@@ -423,9 +423,10 @@ class PVRCNN_SSL(Detector3DTemplate):
             pseudo_boxes_list = [torch.cat([pred_dict['pred_boxes'], pred_dict['pred_labels'].unsqueeze(-1)], dim=-1)
                                  for pred_dict in pred_dicts]
             pseudo_scores = [pred_dict['pred_scores'] for pred_dict in pred_dicts]
+            gt_boxes = [gt_box for gt_box in batch_dict['gt_boxes']]
             metric_inputs = {'preds': pseudo_boxes_list,
                              'pred_scores': pseudo_scores,
-                             'ground_truths': batch_dict['gt_boxes']}
+                             'ground_truths': gt_boxes}
 
             self.metric_registry.get('test').update(**metric_inputs)
 
