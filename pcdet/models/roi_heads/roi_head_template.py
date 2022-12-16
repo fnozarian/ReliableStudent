@@ -185,7 +185,7 @@ class RoIHeadTemplate(nn.Module):
             targets_dict['gt_of_rois_var'][unlabeled_inds, :num_rois_ema, :-1] = batch_dict['pred_boxes_ema_var'][
                 unlabeled_inds]
 
-    def update_metrics(self, targets_dict, mask_type='cls', vis_type='pred_gt', pred_type='pred_gt', update_roi_pl=False, update_ema_gt=False):
+    def update_metrics(self, targets_dict, mask_type='cls', vis_type='pred_gt', pred_type='pred_gt', update_roi_pl=False, update_ema_gt=False, update_pred_pl=False):
         metric_registry = targets_dict['metric_registry']
         tag = f'rcnn_{pred_type}_metrics_{mask_type}'
         metrics = metric_registry.get(tag)
@@ -281,6 +281,13 @@ class RoIHeadTemplate(nn.Module):
             metrics_roi_pl = metric_registry.get(tag)
             metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores, 'ground_truths': sample_pls}
             metrics_roi_pl.update(**metric_inputs_roi_pl)
+        if update_pred_pl:
+            tag = f'rcnn_pred_pl_metrics_{mask_type}'
+            metrics_pred_pl = metric_registry.get(tag)
+            metric_inputs_pred_pl = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois,
+                                    'roi_scores': sample_roi_scores, 'ground_truths': sample_pls,
+                                    'targets': sample_targets, 'target_scores': sample_target_scores}
+            metrics_pred_pl.update(**metric_inputs_pred_pl)
 
     def assign_targets(self, batch_dict):
 
@@ -520,7 +527,7 @@ class RoIHeadTemplate(nn.Module):
             self.pre_loss_filtering()
 
         # self.update_metrics(self.forward_ret_dict, mask_type='reg')
-        self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type='pred_gt', vis_type='roi_pl', update_roi_pl=True)
+        self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type='pred_gt', vis_type='roi_pl', update_pred_pl=True)
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)
