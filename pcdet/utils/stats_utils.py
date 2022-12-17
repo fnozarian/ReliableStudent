@@ -31,8 +31,10 @@ class PredQualityMetrics(Metric):
         self.tag = kwargs.get('tag', None)
         self.dataset = kwargs.get('dataset', None)
         self.cls_bg_thresh = kwargs.get('cls_bg_thresh',  0.25)
-        self.metrics_name = ["pred_ious", "pred_accs", "pred_fgs", "sem_score_fgs", "sem_score_bgs", "score_fgs",
-                             "score_bgs", "target_score_fg", "target_score_bg", "num_pred_boxes", "num_gt_boxes"]
+        self.metrics_name = ["pred_ious", "pred_accs", "pred_precision", "pred_recall", "num_correctly_classified",
+                             "num_misclassified_fp", "num_misclassified_fn", "pred_fgs", "sem_score_fgs",
+                             "sem_score_bgs", "score_fgs", "score_bgs", "target_score_fg", "target_score_bg",
+                             "num_pred_boxes", "num_gt_boxes"]
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
         self.class_agnostic_fg_thresh = 0.7
         for metric_name in self.metrics_name:
@@ -83,16 +85,14 @@ class PredQualityMetrics(Metric):
 
             num_gts = valid_gts_mask.sum()
             num_preds = valid_preds_mask.sum()
-            pred_cls_agnostic_mask = pred_labels.new_ones(num_preds, dtype=torch.bool)
-            gt_cls_agnostic_mask = valid_gt_boxes.new_ones(num_gts, dtype=torch.bool)
 
             classwise_metrics = {}
             for metric_name in self.metrics_name:
                 classwise_metrics[metric_name] = sample_tensor.new_zeros(num_classes + 1).fill_(float('nan'))
 
-            for cind in range(num_classes + 1):
-                pred_cls_mask = pred_cls_agnostic_mask if cind == num_classes else pred_labels == cind
-                gt_cls_mask = gt_cls_agnostic_mask if cind == num_classes else valid_gt_boxes[:, -1] == cind
+            for cind in range(num_classes):
+                pred_cls_mask = pred_labels == cind
+                gt_cls_mask = valid_gt_boxes[:, -1] == cind
                 classwise_metrics['num_pred_boxes'][cind] = pred_cls_mask.sum()
                 classwise_metrics['num_gt_boxes'][cind] = gt_cls_mask.sum()
 
@@ -100,50 +100,50 @@ class PredQualityMetrics(Metric):
                     overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
                     preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
 
-                    if cind == num_classes:
-                        correctly_classified_mask = pred_labels == valid_gt_boxes[assigned_gt_inds, -1]
-                    else:
-                        assigned_gt_cls_mask = valid_gt_boxes[assigned_gt_inds, -1] == cind
-                        correctly_classified_mask = pred_cls_mask == assigned_gt_cls_mask
-                    classwise_metrics['pred_accs'][cind] = correctly_classified_mask.sum() / num_preds
-                    correctly_classified_cls_mask = pred_cls_mask & correctly_classified_mask
+                    assigned_gt_cls_mask = valid_gt_boxes[assigned_gt_inds, -1] == cind
 
-                    classwise_metrics['pred_ious'][cind] = (preds_iou_max * correctly_classified_cls_mask.float()).sum() / correctly_classified_cls_mask.sum()
+                    tp_mask = (pred_cls_mask & assigned_gt_cls_mask)
+                    fp_mask = pred_cls_mask & (~assigned_gt_cls_mask)
+                    fn_mask = (~pred_cls_mask) & assigned_gt_cls_mask
+
+                    classwise_metrics['num_correctly_classified'][cind] = tp_mask.sum()
+                    classwise_metrics['num_misclassified_fp'][cind] = fp_mask.sum()
+                    classwise_metrics['num_misclassified_fn'][cind] = fn_mask.sum()
+                    classwise_metrics['pred_accs'][cind] = tp_mask.sum() / num_preds
+                    classwise_metrics['pred_precision'][cind] = tp_mask.sum() / (tp_mask | fp_mask).sum()
+                    classwise_metrics['pred_recall'][cind] = tp_mask.sum() / (tp_mask | fn_mask).sum()
 
                     # Using kitti test class-wise fg threshold instead of thresholds used during train.
                     classwise_fg_thresh = self.class_agnostic_fg_thresh if cind == num_classes else self.min_overlaps[cind]
                     fg_mask = preds_iou_max > classwise_fg_thresh
-                    classwise_metrics['pred_fgs'][cind] = (fg_mask & correctly_classified_cls_mask).sum() / correctly_classified_cls_mask.sum()
+                    bg_mask = ~fg_mask  # bg_maks = preds_iou_max < self.cls_bg_thresh
+                    tp_fg_mask = fg_mask & tp_mask
+                    classwise_metrics['pred_fgs'][cind] = (tp_fg_mask).sum() / tp_mask.sum()
 
-                    bg_maks = preds_iou_max < self.cls_bg_thresh
+                    classwise_metrics['pred_ious'][cind] = (preds_iou_max * tp_fg_mask.float()).sum() / tp_fg_mask.sum()
 
-                    cls_score_fg = (valid_pred_scores.squeeze() * fg_mask.float() * correctly_classified_cls_mask.float()).sum() \
-                                   / (fg_mask & correctly_classified_cls_mask).sum()
+                    cls_score_fg = (valid_pred_scores.squeeze() * tp_fg_mask.float()).sum() / (tp_fg_mask).sum()
                     classwise_metrics['score_fgs'][cind] = cls_score_fg
 
-                    cls_score_bg = (valid_pred_scores.squeeze() * bg_maks.float() * correctly_classified_cls_mask.float()).sum() \
-                                   / torch.clamp((bg_maks & correctly_classified_cls_mask).float().sum(), min=1.0)
+                    tp_bg_mask = bg_mask & tp_mask
+                    cls_score_bg = (valid_pred_scores.squeeze() * tp_bg_mask.float()).sum() / torch.clamp(tp_bg_mask.float().sum(), min=1.0)
                     classwise_metrics['score_bgs'][cind] = cls_score_bg
 
                     # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
                     # while without clamp it is N/A, which makes more sense.
                     if valid_roi_scores is not None:
                         valid_roi_scores = torch.sigmoid(valid_roi_scores)
-                        cls_sem_score_fg = (valid_roi_scores.squeeze() * fg_mask.float() * correctly_classified_cls_mask.float()).sum() \
-                                           / (fg_mask & correctly_classified_cls_mask).sum()
+                        cls_sem_score_fg = (valid_roi_scores.squeeze() * tp_fg_mask.float()).sum() / (tp_fg_mask).sum()
                         classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
 
-                        cls_sem_score_bg = (valid_roi_scores.squeeze() * bg_maks.float() * correctly_classified_cls_mask.float()).sum() \
-                                           / torch.clamp((bg_maks & correctly_classified_cls_mask).float().sum(), min=1.0)
+                        cls_sem_score_bg = (valid_roi_scores.squeeze() * tp_bg_mask.float()).sum() / torch.clamp(tp_bg_mask.float().sum(), min=1.0)
                         classwise_metrics['sem_score_bgs'][cind] = cls_sem_score_bg
 
                     if valid_target_scores is not None:
-                        cls_target_score_fg = (valid_target_scores.squeeze() * fg_mask.float() * correctly_classified_cls_mask.float()).sum() \
-                                              / (fg_mask & correctly_classified_cls_mask).sum()
+                        cls_target_score_fg = (valid_target_scores.squeeze() * tp_fg_mask.float()).sum() / (tp_fg_mask).sum()
                         classwise_metrics['target_score_fg'][cind] = cls_target_score_fg
 
-                        cls_target_score_bg = (valid_target_scores.squeeze() * bg_maks.float() * correctly_classified_cls_mask.float()).sum() \
-                                              / torch.clamp((bg_maks & correctly_classified_cls_mask).float().sum(), min=1.0)
+                        cls_target_score_bg = (valid_target_scores.squeeze() * tp_bg_mask.float()).sum() / torch.clamp(tp_bg_mask.float().sum(), min=1.0)
                         classwise_metrics['target_score_bg'][cind] = cls_target_score_bg
 
             for key, val in classwise_metrics.items():
