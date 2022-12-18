@@ -526,8 +526,9 @@ class RoIHeadTemplate(nn.Module):
         if self.model_cfg.ENABLE_RCNN_CONSISTENCY:
             self.pre_loss_filtering()
 
-        # self.update_metrics(self.forward_ret_dict, mask_type='reg')
-        self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type='pred_gt', vis_type='roi_pl', update_pred_pl=True)
+        if self.model_cfg.get("ENABLE_EVAL", None):
+            # self.update_metrics(self.forward_ret_dict, mask_type='reg')
+            self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type='pred_gt', vis_type='roi_pl', update_pred_pl=True)
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)

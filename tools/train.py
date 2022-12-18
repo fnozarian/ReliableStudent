@@ -209,7 +209,7 @@ def main():
         logger=logger,
         training=False
     )
-    eval_in_train = cfg.MODEL.POST_PROCESSING.get('EVAL_DURING_TRAIN', False)
+    eval_in_train = cfg.MODEL.POST_PROCESSING.get('TEST_EVAL_DURING_TRAIN', False)
     if eval_in_train:
         test_loader_during_train = test_loader
     else:

@@ -163,6 +163,7 @@ MODEL:
         ENABLE_RELIABILITY: False
         ENABLE_RCNN_CONSISTENCY: False
         ENABLE_SOFT_TEACHER: False
+        ENABLE_EVAL: True
         SHARED_FC: [256, 256]
         CLS_FC: [256, 256]
         REG_FC: [256, 256]
@@ -228,7 +229,7 @@ MODEL:
 
         EVAL_METRIC: kitti
         ENABLE_KITTI_EVAL: True
-        EVAL_DURING_TRAIN: True
+        TEST_EVAL_DURING_TRAIN: True
         NMS_CONFIG:
             MULTI_CLASSES_NMS: False
             NMS_TYPE: nms_gpu
