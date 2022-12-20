@@ -210,7 +210,7 @@ MODEL:
             UNLABELED_SAMPLER_TYPE: None
 
         LOSS_CONFIG:
-            UL_INTERVAL_ROI_IOU_SCORE_TYPE: 'interval-only' # two options: `all` or `interval-only`
+            UL_RCNN_CLS_WEIGHT_TYPE: 'interval-only' # two options: `all` or `interval-only`
             USE_BOX_REG_VAR: False
             CLS_LOSS: BinaryCrossEntropy
             REG_LOSS: smooth-l1
