@@ -439,8 +439,8 @@ class RoIHeadTemplate(nn.Module):
                 cls_valid_mask = cls_valid_mask.reshape(batch_size, -1)
                 if 'rcnn_cls_weights' in forward_ret_dict:
                     rcnn_cls_weights = forward_ret_dict['rcnn_cls_weights']
-                    num_valid = ((cls_valid_mask * rcnn_cls_weights) > 0).sum(-1)
-                    rcnn_loss_cls = (batch_loss_cls * cls_valid_mask * rcnn_cls_weights).sum(-1) / torch.clamp(num_valid, min=1.0)
+                    rcnn_loss_cls_norm = (cls_valid_mask * rcnn_cls_weights).sum(-1)
+                    rcnn_loss_cls = (batch_loss_cls * cls_valid_mask * rcnn_cls_weights).sum(-1) / torch.clamp(rcnn_loss_cls_norm, min=1.0)
                 else:
                     rcnn_loss_cls = (batch_loss_cls * cls_valid_mask).sum(-1) / torch.clamp(cls_valid_mask.sum(-1), min=1.0)
                 rcnn_acc_cls = torch.abs(torch.sigmoid(rcnn_cls_flat) - rcnn_cls_labels).reshape(batch_size, -1)
