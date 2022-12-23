@@ -15,7 +15,7 @@ from pcdet.ops.iou3d_nms import iou3d_nms_utils
 import math
 from pcdet.config import cfg
 from matplotlib import pyplot as plt
-
+import torch.nn.functional as F
 # TODO(farzad): Pass only scores and labels?
 #               Calculate overlap inside update or compute?
 #               Change the states to TP, FP, FN, etc?
@@ -192,8 +192,8 @@ class KITTIEvalMetrics(Metric):
                                 [0.7, 0.5, 0.5, 0.7, 0.5, 0.7],
                                 [0.7, 0.5, 0.5, 0.7, 0.5, 0.7]])
         self.min_overlaps = np.expand_dims(overlap_0_7, axis=0)  # [1, num_metrics, num_cls][1, 3, 6]
-        class_to_name = {0: 'Car', 1: 'Pedestrian', 2: 'Cyclist', 3: 'Van', 4: 'Person_sitting', 5: 'Truck'}
-        name_to_class = {v: n for n, v in class_to_name.items()}
+        self.class_to_name = {0: 'Car', 1: 'Pedestrian', 2: 'Cyclist', 3: 'Van', 4: 'Person_sitting', 5: 'Truck'}
+        name_to_class = {v: n for n, v in self.class_to_name.items()}
         if not isinstance(current_classes, (list, tuple)):
             current_classes = [current_classes]
         current_classes_int = []
@@ -290,15 +290,46 @@ class KITTIEvalMetrics(Metric):
                 elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
                     kitti_eval_metrics[metric_name + '_per_tps'] = class_metrics_batch
 
-            # Get calculated PR
-            num_labeled_samples = len(self.dataset.kitti_infos)
-            num_unlabeled_samples = total_num_samples
-            r = num_unlabeled_samples / num_labeled_samples
+            # Get calculated PR and class distribution
+            num_lbl_samples = len(self.dataset.kitti_infos)
+            num_ulb_samples = total_num_samples
+            ulb_lbl_ratio = num_ulb_samples / num_lbl_samples
+            pred_labels, pred_scores = [], []
+            for sample_dets in self.detections:
+                if len(sample_dets) == 0:
+                    continue
+                pred_labels.append(sample_dets[:, -2])
+                pred_scores.append(sample_dets[:, -1])
+            pred_labels = torch.stack(pred_labels).to(torch.int64).view(-1)
+            pred_scores = torch.stack(pred_scores).view(-1)
+            classwise_thresh = pred_scores.new_tensor(self.min_overlaps[0, self.metric]).unsqueeze(0).repeat(
+                len(pred_labels), 1).gather(
+                dim=-1, index=pred_labels.unsqueeze(-1)).view(-1)
+            tp_mask = pred_scores >= classwise_thresh
             pr_cls = {}
-            for cls in raw_metrics_classwise['tps'].keys():
-                num_labeled_cls = self.dataset.class_counter[cls]
-                num_unlabeled_cls_tp = raw_metrics_classwise['tps'][cls]
-                pr_cls[cls] = num_unlabeled_cls_tp / (r * num_labeled_cls)
+            ulb_cls_counter = {}
+            # Because self.dataset.class_counter has other classes we only keep
+            # current classes in this dict to calculate the sum over all classes.
+            lbl_cls_counter = {}
+            for cls_id, cls_thresh in zip(self.current_classes, self.min_overlaps[0, self.metric]):
+                cls_name = self.class_to_name[cls_id]
+                num_lbl_cls = self.dataset.class_counter[cls_name]
+                cls_mask = pred_labels == cls_id
+                num_ulb_cls = (tp_mask & cls_mask).sum().item()
+                ulb_cls_counter[cls_name] = num_ulb_cls
+                lbl_cls_counter[cls_name] = num_lbl_cls
+                pr_cls[cls_name] = num_ulb_cls / (ulb_lbl_ratio * num_lbl_cls)
+
+            cls_dist = {}
+            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
+                cls_dist[cls_name+'_lbl'] = lbl_cls_counter[cls_name] / sum(lbl_cls_counter.values())
+                cls_dist[cls_name+'_ulb'] = ulb_cls_counter[cls_name] / sum(ulb_cls_counter.values())
+            lbl_dist = torch.tensor(list(lbl_cls_counter.values())) / sum(lbl_cls_counter.values())
+            ulb_dist = torch.tensor(list(ulb_cls_counter.values())) / sum(ulb_cls_counter.values())
+
+            kl_div = F.kl_div(ulb_dist.log().unsqueeze(0), lbl_dist.unsqueeze(0), reduction="batchmean").item()
+            kitti_eval_metrics['class_distribution'] = cls_dist
+            kitti_eval_metrics['kl_div'] = kl_div
             kitti_eval_metrics['PR'] = pr_cls
 
             # Get calculated Precision

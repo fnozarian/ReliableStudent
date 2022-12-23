@@ -513,8 +513,6 @@ class RoIHeadTemplate(nn.Module):
                 raise ValueError
 
             self.forward_ret_dict['rcnn_cls_weights'][unlabeled_inds] = unlabeled_rcnn_cls_weights
-        else:
-            print("No pre_loss_filtering! (Baseline Mode)")
 
     def get_loss(self, tb_dict=None, scalar=True):
         tb_dict = {} if tb_dict is None else tb_dict
