@@ -191,7 +191,7 @@ class RoIHeadTemplate(nn.Module):
         metrics = metric_registry.get(tag)
         unlabeled_inds = targets_dict['unlabeled_inds']
 
-        sample_preds, sample_pred_scores = [], []
+        sample_preds, sample_pred_scores, sample_pred_weights = [], [], []
         sample_rois, sample_roi_scores = [], []
         sample_targets, sample_target_scores = [], []
         sample_pls, sample_pl_scores = [], []
@@ -233,13 +233,15 @@ class RoIHeadTemplate(nn.Module):
             sample_pl_scores.append(pl_scores)
 
             # Teacher refinements (Preds) of student's rois
-            if update_ema_gt and self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
+            if update_ema_gt and self.get('ENABLE_SOFT_TEACHER', False):
                 pred_boxes_ema = targets_dict['batch_box_preds_teacher'][uind][mask].detach().clone()
                 pred_labeled_boxes_ema = torch.cat([pred_boxes_ema, roi_labels], dim=-1)
                 pred_scores_ema = targets_dict['rcnn_cls_score_teacher'][uind][mask].detach().clone()
                 ema_preds_of_std_rois.append(pred_labeled_boxes_ema)
                 ema_pred_scores_of_std_rois.append(pred_scores_ema)
-
+            if self.model_cfg.get('ENABLE_SOFT_TEACHER', False):
+                pred_weights = targets_dict['rcnn_cls_weights'][uind][mask].detach().clone()
+                sample_pred_weights.append(pred_weights)
             if self.model_cfg.get('ENABLE_VIS', False):
                 points_mask = targets_dict['points'][:, 0] == uind
                 points = targets_dict['points'][points_mask, 1:]
@@ -257,7 +259,7 @@ class RoIHeadTemplate(nn.Module):
                 elif vis_type == 'pred_gt':
                     vis_pred_boxes = pred_boxes
                     vis_pred_scores = pred_scores
-                elif vis_type == 'ema_gt' and self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
+                elif vis_type == 'ema_gt' and self.model_cfg.get('ENABLE_SOFT_TEACHER', False):
                     vis_pred_boxes = targets_dict['batch_box_preds_teacher'][uind][mask].detach().clone()
                     vis_pred_scores = targets_dict['rcnn_cls_score_teacher'][uind][mask].detach().clone()
                 else:
@@ -267,26 +269,31 @@ class RoIHeadTemplate(nn.Module):
                       pred_scores=vis_pred_scores, pred_labels=roi_labels.view(-1),
                       filename=f'vis_{vis_type}_{uind}.png')
 
+        sample_pred_weights = sample_pred_weights if len(sample_pred_weights) > 0 else None
         metric_inputs = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois, 'roi_scores': sample_roi_scores,
-                         'ground_truths': sample_gts, 'targets': sample_targets, 'target_scores': sample_target_scores}
+                         'ground_truths': sample_gts, 'targets': sample_targets, 'target_scores': sample_target_scores,
+                         'pred_weights': sample_pred_weights}
         metrics.update(**metric_inputs)
 
-        if update_ema_gt and self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
+        if update_ema_gt and self.model_cfg.get('ENABLE_SOFT_TEACHER', False):
             tag = f'rcnn_ema_gt_metrics_{mask_type}'
             metrics_ema = metric_registry.get(tag)
-            metric_inputs_ema = {'preds': ema_preds_of_std_rois, 'pred_scores': ema_pred_scores_of_std_rois, 'ground_truths': sample_gts}
+            metric_inputs_ema = {'preds': ema_preds_of_std_rois, 'pred_scores': ema_pred_scores_of_std_rois,
+                                 'ground_truths': sample_gts, 'pred_weights': sample_pred_weights}
             metrics_ema.update(**metric_inputs_ema)
         if update_roi_pl:
             tag = f'rcnn_roi_pl_metrics_{mask_type}'
             metrics_roi_pl = metric_registry.get(tag)
-            metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores, 'ground_truths': sample_pls}
+            metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores,
+                                    'ground_truths': sample_pls, 'pred_weights': sample_pred_weights}
             metrics_roi_pl.update(**metric_inputs_roi_pl)
         if update_pred_pl:
             tag = f'rcnn_pred_pl_metrics_{mask_type}'
             metrics_pred_pl = metric_registry.get(tag)
             metric_inputs_pred_pl = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois,
-                                    'roi_scores': sample_roi_scores, 'ground_truths': sample_pls,
-                                    'targets': sample_targets, 'target_scores': sample_target_scores}
+                                     'roi_scores': sample_roi_scores, 'ground_truths': sample_pls,
+                                     'targets': sample_targets, 'target_scores': sample_target_scores,
+                                     'pred_weights': sample_pred_weights}
             metrics_pred_pl.update(**metric_inputs_pred_pl)
 
     def assign_targets(self, batch_dict):

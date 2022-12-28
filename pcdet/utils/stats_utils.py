@@ -34,14 +34,14 @@ class PredQualityMetrics(Metric):
         self.metrics_name = ["pred_ious", "pred_accs", "pred_precision", "pred_recall", "num_correctly_classified",
                              "num_misclassified_fp", "num_misclassified_fn", "pred_fgs", "sem_score_fgs",
                              "sem_score_bgs", "score_fgs", "score_bgs", "target_score_fg", "target_score_bg",
-                             "num_pred_boxes", "num_gt_boxes"]
+                             "num_pred_boxes", "num_gt_boxes", "pred_weight_fg", "pred_weight_bg"]
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
         self.class_agnostic_fg_thresh = 0.7
         for metric_name in self.metrics_name:
             self.add_state(metric_name, default=[], dist_reduce_fx='cat')
 
     def update(self, preds: [torch.Tensor], ground_truths: [torch.Tensor], pred_scores: [torch.Tensor],
-               rois=None, roi_scores=None, targets=None, target_scores=None) -> None:
+               rois=None, roi_scores=None, targets=None, target_scores=None, pred_weights=None) -> None:
         assert isinstance(preds, list) and isinstance(ground_truths, list) and isinstance(pred_scores, list)
         assert all([pred.dim() == 2 for pred in preds]) and all([pred.dim() == 2 for pred in ground_truths]) and all([pred.dim() == 1 for pred in pred_scores])
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([gt.shape[-1] == 8 for gt in ground_truths])
@@ -53,6 +53,7 @@ class PredQualityMetrics(Metric):
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
         target_scores = [target_score.clone().detach() for target_score in target_scores] if target_scores is not None else None
         ground_truths = [gt_box.clone().detach() for gt_box in ground_truths]
+        pred_weights = [pred_weight.clone().detach() for pred_weight in pred_weights] if pred_weights is not None else None
 
         sample_tensor = preds[0] if len(preds) else ground_truths[0]
         num_classes = len(self.dataset.class_names)
@@ -66,10 +67,13 @@ class PredQualityMetrics(Metric):
                 roi_scores[i] = roi_scores[i].unsqueeze(dim=-1)
             if target_scores is not None and target_scores[i].ndim == 1:
                 target_scores[i] = target_scores[i].unsqueeze(dim=-1)
+            if pred_weights is not None and pred_weights[i].ndim == 1:
+                pred_weights[i] = pred_weights[i].unsqueeze(dim=-1)
 
             valid_pred_scores = pred_scores[i][valid_preds_mask.nonzero().view(-1)]
             valid_roi_scores = roi_scores[i][valid_preds_mask.nonzero().view(-1)] if roi_scores else None
             valid_target_scores = target_scores[i][valid_preds_mask.nonzero().view(-1)] if target_scores else None
+            valid_pred_weights = pred_weights[i][valid_preds_mask.nonzero().view(-1)] if pred_weights else None
 
             valid_gts_mask = torch.logical_not(torch.all(ground_truths[i] == 0, dim=-1))
             valid_gt_boxes = ground_truths[i][valid_gts_mask]
@@ -145,6 +149,12 @@ class PredQualityMetrics(Metric):
 
                         cls_target_score_bg = (valid_target_scores.squeeze() * tp_bg_mask.float()).sum() / torch.clamp(tp_bg_mask.float().sum(), min=1.0)
                         classwise_metrics['target_score_bg'][cind] = cls_target_score_bg
+                    if valid_pred_weights is not None:
+                        cls_pred_weight_fg = (valid_pred_weights.squeeze() * tp_fg_mask.float()).sum() / (tp_fg_mask).sum()
+                        classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_fg
+
+                        cls_pred_weight_bg = (valid_pred_weights.squeeze() * tp_bg_mask.float()).sum() / torch.clamp(tp_bg_mask.float().sum(), min=1.0)
+                        classwise_metrics['pred_weight_bg'][cind] = cls_pred_weight_bg
 
             for key, val in classwise_metrics.items():
                 # Note that unsqueeze is necessary because torchmetric performs the dist cat on dim 0.
