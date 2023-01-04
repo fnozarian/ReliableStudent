@@ -310,8 +310,8 @@ class KITTIEvalMetrics(Metric):
                     continue
                 pred_labels.append(sample_dets[:, -2])
                 pred_scores.append(sample_dets[:, -1])
-            pred_labels = torch.stack(pred_labels).to(torch.int64).view(-1)
-            pred_scores = torch.stack(pred_scores).view(-1)
+            pred_labels = torch.cat(pred_labels).to(torch.int64).view(-1)
+            pred_scores = torch.cat(pred_scores).view(-1)
             classwise_thresh = pred_scores.new_tensor(self.min_overlaps[0, self.metric]).unsqueeze(0).repeat(
                 len(pred_labels), 1).gather(
                 dim=-1, index=pred_labels.unsqueeze(-1)).view(-1)
