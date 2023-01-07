@@ -505,7 +505,7 @@ class RoIHeadTemplate(nn.Module):
                 gt_iou_of_rois = self.forward_ret_dict['gt_iou_of_rois'][unlabeled_inds].detach().clone()
                 roi_labels = self.forward_ret_dict['roi_labels'][unlabeled_inds].detach().clone() - 1
                 ulb_cls_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_CLS_FG_THRESH
-                fg_thresh = gt_iou_of_rois.new_tensor(ulb_cls_fg_thresh).reshape(1, 1, -1).repeat(1, gt_iou_of_rois.shape[1], 1)
+                fg_thresh = gt_iou_of_rois.new_tensor(ulb_cls_fg_thresh).reshape(1, 1, -1).repeat(*gt_iou_of_rois.shape[:2], 1)
                 cls_fg_thresh = torch.gather(fg_thresh, dim=-1, index=roi_labels.unsqueeze(-1)).squeeze(-1)
                 ulb_fg_mask = gt_iou_of_rois > cls_fg_thresh
                 ulb_bg_mask = gt_iou_of_rois < self.model_cfg.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH
