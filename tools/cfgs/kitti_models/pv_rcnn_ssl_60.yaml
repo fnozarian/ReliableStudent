@@ -200,14 +200,16 @@ MODEL:
             CLS_WEIGHT: 0.35
             CLS_FG_THRESH: 0.75
             CLS_BG_THRESH: 0.25
-            UNLABELED_CLS_FG_THRESH: 0.75
+            UNLABELED_CLS_FG_THRESH: [0.7, 0.3, 0.4]
             UNLABELED_CLS_BG_THRESH: 0.25
             CLS_BG_THRESH_LO: 0.1
             HARD_BG_RATIO: 0.8
 
             REG_FG_THRESH: 0.55
-            UNLABELED_REG_FG_THRESH: 0.9
+            UNLABELED_REG_FG_THRESH: 0.55
             UNLABELED_SAMPLER_TYPE: None
+            UNLABELED_SAMPLE_EASY_BG: False
+            UNLABELED_SHARP_RCNN_CLS_LABELS: False
 
         LOSS_CONFIG:
             UL_RCNN_CLS_WEIGHT_TYPE: 'interval-only' # two options: `all` or `interval-only`
