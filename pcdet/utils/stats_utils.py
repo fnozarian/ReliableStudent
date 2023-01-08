@@ -33,9 +33,10 @@ class PredQualityMetrics(Metric):
         self.cls_bg_thresh = kwargs.get('cls_bg_thresh',  0.25)
         self.metrics_name = ["pred_ious", "pred_accs", "pred_precision", "pred_recall", "num_correctly_classified",
                              "num_misclassified_fp", "num_misclassified_fn", "pred_fgs", "sem_score_fgs",
-                             "sem_score_bgs", "score_fgs", "score_bgs", "target_score_fg", "target_score_bg",
-                             "num_pred_boxes", "num_gt_boxes", "pred_weight_fg", "pred_weight_bg", "pred_ucs",
-                             "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc", "pred_weight_uc"]
+                             "sem_score_bgs", "score_fgs", "score_bgs", "target_score_fg", "target_score_mc_fg",
+                             "target_score_cc_fg", "target_score_bg", "num_pred_boxes", "num_gt_boxes", 
+                             "pred_weight_fg", "pred_weight_mc_fg", "pred_weight_cc_fg", "pred_weight_bg",
+                             "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc", "pred_weight_uc"]
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
         self.class_agnostic_fg_thresh = 0.7
         for metric_name in self.metrics_name:
@@ -154,6 +155,20 @@ class PredQualityMetrics(Metric):
 
                         cls_target_score_uc = (valid_target_scores.squeeze() * cc_uc_mask.float()).sum() / torch.clamp(cc_uc_mask.float().sum(), min=1.0)
                         classwise_metrics['target_score_uc'][cind] = cls_target_score_uc
+
+                        # Mask for preds which were not FGs wrt classwise thresholding on rcnn_cls_labels
+                        pl_bg_mask = valid_target_scores.squeeze() != 1
+                        # Misclassified FG mask for faulty preds which are FG wrt GT, but not FGs wrt classwise thresholding on rcnn_cls_labels
+                        mc_fg_mask = pl_bg_mask & cc_fg_mask 
+                        cc_fg_mask = ~pl_bg_mask & cc_fg_mask 
+
+                        # target scores of faulty preds assigned as BG but were actually FG
+                        cls_target_score_mc_fg = (valid_target_scores.squeeze() * mc_fg_mask).sum() / torch.clamp(mc_fg_mask.float().sum(), min=1.0)
+                        classwise_metrics['target_score_mc_fg'][cind] = cls_target_score_mc_fg
+                        # target scores of correct preds assigned as BG but were actually FG
+                        cls_target_score_cc_fg = (valid_target_scores.squeeze() * cc_fg_mask).sum() / torch.clamp(cc_fg_mask.float().sum(), min=1.0)
+                        classwise_metrics['target_score_cc_fg'][cind] = cls_target_score_cc_fg
+
                     if valid_pred_weights is not None:
                         cls_pred_weight_fg = (valid_pred_weights.squeeze() * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
                         classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_fg
@@ -163,6 +178,14 @@ class PredQualityMetrics(Metric):
 
                         cls_pred_weight_uc = (valid_pred_weights.squeeze() * cc_uc_mask.float()).sum() / torch.clamp(cc_uc_mask.float().sum(), min=1.0)
                         classwise_metrics['pred_weight_uc'][cind] = cls_pred_weight_uc
+
+                        if valid_target_scores is not None:
+                            # teacher's weights of faulty preds assigned as BG but were actually FG
+                            cls_pred_weight_mc_fg = (valid_pred_weights.squeeze() * mc_fg_mask).sum() / torch.clamp(mc_fg_mask.float().sum(), min=1.0)
+                            classwise_metrics['pred_weight_mc_fg'][cind] = cls_pred_weight_mc_fg
+                            # teacher's weights of correct preds assigned as BG but were actually FG
+                            cls_pred_weight_cc_fg = (valid_pred_weights.squeeze() * cc_fg_mask).sum() / torch.clamp(cc_fg_mask.float().sum(), min=1.0)
+                            classwise_metrics['pred_weight_cc_fg'][cind] = cls_pred_weight_cc_fg
 
             for key, val in classwise_metrics.items():
                 # Note that unsqueeze is necessary because torchmetric performs the dist cat on dim 0.
