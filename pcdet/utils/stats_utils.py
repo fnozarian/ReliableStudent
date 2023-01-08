@@ -34,9 +34,10 @@ class PredQualityMetrics(Metric):
         self.metrics_name = ["pred_ious", "pred_accs", "pred_precision", "pred_recall", "num_correctly_classified",
                              "num_misclassified_fp", "num_misclassified_fn", "pred_fgs", "sem_score_fgs",
                              "sem_score_bgs", "score_fgs", "score_bgs", "target_score_fg", "target_score_mc_fg",
-                             "target_score_cc_fg", "target_score_bg", "num_pred_boxes", "num_gt_boxes", 
-                             "pred_weight_fg", "pred_weight_mc_fg", "pred_weight_cc_fg", "pred_weight_bg",
-                             "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc", "pred_weight_uc"]
+                             "target_score_bg", "num_pred_boxes", "num_gt_boxes",
+                             "pred_weight_fg", "pred_weight_mc_fg", "pred_weight_bg",
+                             "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc", "pred_weight_uc",
+                             "pred_fgs_mc", "pred_ious_mc", "score_fgs_mc", "target_score_mc_fg", ]
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
         self.class_agnostic_fg_thresh = 0.7
         for metric_name in self.metrics_name:
@@ -140,52 +141,50 @@ class PredQualityMetrics(Metric):
                         cls_sem_score_fg = (valid_roi_scores.squeeze() * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
                         classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
 
-                        cls_sem_score_bg = (valid_roi_scores.squeeze() * cc_bg_mask.float()).sum() / torch.clamp(cc_bg_mask.float().sum(), min=1.0)
+                        cls_sem_score_bg = (valid_roi_scores.squeeze() * cc_bg_mask.float()).sum() / cc_bg_mask.float().sum()
                         classwise_metrics['sem_score_bgs'][cind] = cls_sem_score_bg
 
-                        cls_sem_score_uc = (valid_roi_scores.squeeze() * cc_uc_mask.float()).sum() / torch.clamp(cc_uc_mask.float().sum(), min=1.0)
+                        cls_sem_score_uc = (valid_roi_scores.squeeze() * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['sem_score_ucs'][cind] = cls_sem_score_uc
 
                     if valid_target_scores is not None:
-                        cls_target_score_fg = (valid_target_scores.squeeze() * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
-                        classwise_metrics['target_score_fg'][cind] = cls_target_score_fg
-
-                        cls_target_score_bg = (valid_target_scores.squeeze() * cc_bg_mask.float()).sum() / torch.clamp(cc_bg_mask.float().sum(), min=1.0)
+                        cls_target_score_bg = (valid_target_scores.squeeze() * cc_bg_mask.float()).sum() / cc_bg_mask.float().sum()
                         classwise_metrics['target_score_bg'][cind] = cls_target_score_bg
 
-                        cls_target_score_uc = (valid_target_scores.squeeze() * cc_uc_mask.float()).sum() / torch.clamp(cc_uc_mask.float().sum(), min=1.0)
+                        cls_target_score_uc = (valid_target_scores.squeeze() * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['target_score_uc'][cind] = cls_target_score_uc
 
-                        # Mask for preds which were not FGs wrt classwise thresholding on rcnn_cls_labels
-                        pl_bg_mask = valid_target_scores.squeeze() != 1
-                        # Misclassified FG mask for faulty preds which are FG wrt GT, but not FGs wrt classwise thresholding on rcnn_cls_labels
-                        mc_fg_mask = pl_bg_mask & cc_fg_mask 
-                        cc_fg_mask = ~pl_bg_mask & cc_fg_mask 
-
-                        # target scores of faulty preds assigned as BG but were actually FG
-                        cls_target_score_mc_fg = (valid_target_scores.squeeze() * mc_fg_mask).sum() / torch.clamp(mc_fg_mask.float().sum(), min=1.0)
+                        fg_wrt_pl_mask = valid_target_scores.squeeze() == 1.
+                        # Misclassified FG mask for faulty preds which are FG wrt GT,
+                        # but not FGs wrt classwise thresholding on rcnn_cls_labels
+                        mc_fg_mask = ~fg_wrt_pl_mask & cc_fg_mask
+                        tp_fg_mask = fg_wrt_pl_mask & cc_fg_mask
+                        classwise_metrics['pred_fgs_mc'][cind] = mc_fg_mask.sum() / cc_fg_mask.sum()
+                        classwise_metrics['pred_ious_mc'][cind] = (preds_iou_max * mc_fg_mask.float()).sum() / mc_fg_mask.sum()
+                        cls_score_fg = (valid_pred_scores.squeeze() * mc_fg_mask.float()).sum() / mc_fg_mask.sum()
+                        classwise_metrics['score_fgs_mc'][cind] = cls_score_fg
+                        cls_target_score_fg = (valid_target_scores.squeeze() * tp_fg_mask.float()).sum() / tp_fg_mask.sum()
+                        classwise_metrics['target_score_fg'][cind] = cls_target_score_fg
+                        cls_target_score_mc_fg = (valid_target_scores.squeeze() * mc_fg_mask).sum() / mc_fg_mask.float().sum()
                         classwise_metrics['target_score_mc_fg'][cind] = cls_target_score_mc_fg
-                        # target scores of correct preds assigned as BG but were actually FG
-                        cls_target_score_cc_fg = (valid_target_scores.squeeze() * cc_fg_mask).sum() / torch.clamp(cc_fg_mask.float().sum(), min=1.0)
-                        classwise_metrics['target_score_cc_fg'][cind] = cls_target_score_cc_fg
 
                     if valid_pred_weights is not None:
-                        cls_pred_weight_fg = (valid_pred_weights.squeeze() * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
-                        classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_fg
-
-                        cls_pred_weight_bg = (valid_pred_weights.squeeze() * cc_bg_mask.float()).sum() / torch.clamp(cc_bg_mask.float().sum(), min=1.0)
+                        cls_pred_weight_bg = (valid_pred_weights.squeeze() * cc_bg_mask.float()).sum() / cc_bg_mask.float().sum()
                         classwise_metrics['pred_weight_bg'][cind] = cls_pred_weight_bg
 
-                        cls_pred_weight_uc = (valid_pred_weights.squeeze() * cc_uc_mask.float()).sum() / torch.clamp(cc_uc_mask.float().sum(), min=1.0)
+                        cls_pred_weight_uc = (valid_pred_weights.squeeze() * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['pred_weight_uc'][cind] = cls_pred_weight_uc
 
                         if valid_target_scores is not None:
                             # teacher's weights of faulty preds assigned as BG but were actually FG
-                            cls_pred_weight_mc_fg = (valid_pred_weights.squeeze() * mc_fg_mask).sum() / torch.clamp(mc_fg_mask.float().sum(), min=1.0)
+                            cls_pred_weight_mc_fg = (valid_pred_weights.squeeze() * mc_fg_mask).sum() / mc_fg_mask.float().sum()
                             classwise_metrics['pred_weight_mc_fg'][cind] = cls_pred_weight_mc_fg
                             # teacher's weights of correct preds assigned as BG but were actually FG
-                            cls_pred_weight_cc_fg = (valid_pred_weights.squeeze() * cc_fg_mask).sum() / torch.clamp(cc_fg_mask.float().sum(), min=1.0)
-                            classwise_metrics['pred_weight_cc_fg'][cind] = cls_pred_weight_cc_fg
+                            cls_pred_weight_cc_fg = (valid_pred_weights.squeeze() * tp_fg_mask).sum() / tp_fg_mask.float().sum()
+                            classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_cc_fg
+                        else:
+                            cls_pred_weight_fg = (valid_pred_weights.squeeze() * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
+                            classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_fg
 
             for key, val in classwise_metrics.items():
                 # Note that unsqueeze is necessary because torchmetric performs the dist cat on dim 0.

@@ -278,19 +278,19 @@ class RoIHeadTemplate(nn.Module):
                              'pred_weights': sample_pred_weights}
             metrics.update(**metric_inputs)
         if 'ema_gt' in pred_type and self.model_cfg.get('ENABLE_SOFT_TEACHER', False):
-            tag = f'rcnn_{pred_type}_metrics_{mask_type}'
+            tag = f'rcnn_ema_gt_metrics_{mask_type}'
             metrics_ema = metric_registry.get(tag)
             metric_inputs_ema = {'preds': ema_preds_of_std_rois, 'pred_scores': ema_pred_scores_of_std_rois,
                                  'ground_truths': sample_gts, 'pred_weights': sample_pred_weights}
             metrics_ema.update(**metric_inputs_ema)
         if 'roi_pl' in pred_type:
-            tag = f'rcnn_{pred_type}_metrics_{mask_type}'
+            tag = f'rcnn_roi_pl_metrics_{mask_type}'
             metrics_roi_pl = metric_registry.get(tag)
             metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores,
                                     'ground_truths': sample_pls, 'pred_weights': sample_pred_weights}
             metrics_roi_pl.update(**metric_inputs_roi_pl)
         if 'pred_pl' in pred_type:
-            tag = f'rcnn_{pred_type}_metrics_{mask_type}'
+            tag = f'rcnn_pred_pl_metrics_{mask_type}'
             metrics_pred_pl = metric_registry.get(tag)
             metric_inputs_pred_pl = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois,
                                      'roi_scores': sample_roi_scores, 'ground_truths': sample_pls,
