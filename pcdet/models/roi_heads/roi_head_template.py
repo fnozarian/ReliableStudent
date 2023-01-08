@@ -185,10 +185,8 @@ class RoIHeadTemplate(nn.Module):
             targets_dict['gt_of_rois_var'][unlabeled_inds, :num_rois_ema, :-1] = batch_dict['pred_boxes_ema_var'][
                 unlabeled_inds]
 
-    def update_metrics(self, targets_dict, mask_type='cls', vis_type='pred_gt', pred_type='pred_gt', update_roi_pl=False, update_ema_gt=False, update_pred_pl=False):
+    def update_metrics(self, targets_dict, mask_type='cls', vis_type='pred_gt', pred_type=None):
         metric_registry = targets_dict['metric_registry']
-        tag = f'rcnn_{pred_type}_metrics_{mask_type}'
-        metrics = metric_registry.get(tag)
         unlabeled_inds = targets_dict['unlabeled_inds']
 
         sample_preds, sample_pred_scores, sample_pred_weights = [], [], []
@@ -233,7 +231,7 @@ class RoIHeadTemplate(nn.Module):
             sample_pl_scores.append(pl_scores)
 
             # Teacher refinements (Preds) of student's rois
-            if update_ema_gt and self.get('ENABLE_SOFT_TEACHER', False):
+            if 'ema_gt' in pred_type and self.get('ENABLE_SOFT_TEACHER', False):
                 pred_boxes_ema = targets_dict['batch_box_preds_teacher'][uind][mask].detach().clone()
                 pred_labeled_boxes_ema = torch.cat([pred_boxes_ema, roi_labels], dim=-1)
                 pred_scores_ema = targets_dict['rcnn_cls_score_teacher'][uind][mask].detach().clone()
@@ -270,25 +268,29 @@ class RoIHeadTemplate(nn.Module):
                       filename=f'vis_{vis_type}_{uind}.png')
 
         sample_pred_weights = sample_pred_weights if len(sample_pred_weights) > 0 else None
-        metric_inputs = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois, 'roi_scores': sample_roi_scores,
-                         'ground_truths': sample_gts, 'targets': sample_targets, 'target_scores': sample_target_scores,
-                         'pred_weights': sample_pred_weights}
-        metrics.update(**metric_inputs)
 
-        if update_ema_gt and self.model_cfg.get('ENABLE_SOFT_TEACHER', False):
-            tag = f'rcnn_ema_gt_metrics_{mask_type}'
+        if 'pred_gt' in pred_type:
+            tag = f'rcnn_pred_gt_metrics_{mask_type}'
+            metrics = metric_registry.get(tag)
+            metric_inputs = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois,
+                             'roi_scores': sample_roi_scores, 'ground_truths': sample_gts,
+                             'targets': sample_targets, 'target_scores': sample_target_scores,
+                             'pred_weights': sample_pred_weights}
+            metrics.update(**metric_inputs)
+        if 'ema_gt' in pred_type and self.model_cfg.get('ENABLE_SOFT_TEACHER', False):
+            tag = f'rcnn_{pred_type}_metrics_{mask_type}'
             metrics_ema = metric_registry.get(tag)
             metric_inputs_ema = {'preds': ema_preds_of_std_rois, 'pred_scores': ema_pred_scores_of_std_rois,
                                  'ground_truths': sample_gts, 'pred_weights': sample_pred_weights}
             metrics_ema.update(**metric_inputs_ema)
-        if update_roi_pl:
-            tag = f'rcnn_roi_pl_metrics_{mask_type}'
+        if 'roi_pl' in pred_type:
+            tag = f'rcnn_{pred_type}_metrics_{mask_type}'
             metrics_roi_pl = metric_registry.get(tag)
             metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores,
                                     'ground_truths': sample_pls, 'pred_weights': sample_pred_weights}
             metrics_roi_pl.update(**metric_inputs_roi_pl)
-        if update_pred_pl:
-            tag = f'rcnn_pred_pl_metrics_{mask_type}'
+        if 'pred_pl' in pred_type:
+            tag = f'rcnn_{pred_type}_metrics_{mask_type}'
             metrics_pred_pl = metric_registry.get(tag)
             metric_inputs_pred_pl = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois,
                                      'roi_scores': sample_roi_scores, 'ground_truths': sample_pls,
@@ -551,7 +553,7 @@ class RoIHeadTemplate(nn.Module):
 
         if self.model_cfg.get("ENABLE_EVAL", None):
             # self.update_metrics(self.forward_ret_dict, mask_type='reg')
-            self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type='pred_gt', vis_type='roi_pl', update_pred_pl=True)
+            self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type=['pred_gt', 'roi_pl'], vis_type='roi_pl')
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)
