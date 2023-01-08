@@ -289,6 +289,15 @@ class RoIHeadTemplate(nn.Module):
             metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores,
                                     'ground_truths': sample_pls, 'pred_weights': sample_pred_weights}
             metrics_roi_pl.update(**metric_inputs_roi_pl)
+        if 'roi_pl_gt' in pred_type:
+            tag = f'rcnn_roi_pl_gt_metrics_{mask_type}'
+            metrics = metric_registry.get(tag)
+            metric_inputs = {'preds': sample_rois, 'pred_scores': sample_roi_scores,
+                             'ground_truths': sample_gts, 'targets': sample_targets,
+                             'pseudo_labels': sample_pls, 'pseudo_label_scores': sample_pl_scores,
+                             'target_scores': sample_target_scores, 'pred_weights': sample_pred_weights,
+                             'iou_wrt_pl': True}
+            metrics.update(**metric_inputs)
         if 'pred_pl' in pred_type:
             tag = f'rcnn_{pred_type}_metrics_{mask_type}'
             metrics_pred_pl = metric_registry.get(tag)
@@ -553,7 +562,7 @@ class RoIHeadTemplate(nn.Module):
 
         if self.model_cfg.get("ENABLE_EVAL", None):
             # self.update_metrics(self.forward_ret_dict, mask_type='reg')
-            self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type=['pred_gt', 'roi_pl'], vis_type='roi_pl')
+            self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type=['pred_gt', 'roi_pl_gt'], vis_type='roi_pl')
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)
