@@ -504,27 +504,37 @@ class RoIHeadTemplate(nn.Module):
             unlabeled_inds = self.forward_ret_dict['unlabeled_inds']
 
             if self.model_cfg.TARGET_CONFIG.get("UNLABELED_SAMPLER_TYPE", None) != 'subsample_labeled_rois':
-                # ----------- RCNN_CLS_LABELS -----------
                 gt_iou_of_rois = self.forward_ret_dict['gt_iou_of_rois'][unlabeled_inds].detach().clone()
                 roi_labels = self.forward_ret_dict['roi_labels'][unlabeled_inds].detach().clone() - 1
+                
+                # ----------- REG_VALID_MASK -----------
+                reg_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_REG_FG_THRESH
+                filtering_mask = gt_iou_of_rois > reg_fg_thresh
+                self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] = filtering_mask.long()
+
+                # ----------- RCNN_CLS_LABELS -----------
                 ulb_cls_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_CLS_FG_THRESH
                 fg_thresh = gt_iou_of_rois.new_tensor(ulb_cls_fg_thresh).reshape(1, 1, -1).repeat(*gt_iou_of_rois.shape[:2], 1)
                 cls_fg_thresh = torch.gather(fg_thresh, dim=-1, index=roi_labels.unsqueeze(-1)).squeeze(-1)
+                cls_bg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH
+                
                 ulb_fg_mask = gt_iou_of_rois > cls_fg_thresh
-                ulb_bg_mask = gt_iou_of_rois < self.model_cfg.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH
-
+                ulb_bg_mask = gt_iou_of_rois < cls_bg_thresh
+                ulb_interval_mask = ~(ulb_fg_mask | ulb_bg_mask)
                 ignore_mask = torch.eq(self.forward_ret_dict['gt_of_rois'][unlabeled_inds], 0).all(dim=-1)
+                
+                # Hard labeling for FGs/BGs, soft labeling for UCs
                 gt_iou_of_rois[ignore_mask] = -1
                 if self.model_cfg.TARGET_CONFIG.get("UNLABELED_SHARP_RCNN_CLS_LABELS", False):
                     gt_iou_of_rois[ulb_fg_mask] = 1.
                     gt_iou_of_rois[ulb_bg_mask] = 0.
+                # Calibrate(normalize) raw IoUs as per FG and BG thresholds 
+                if self.model_cfg.TARGET_CONFIG.get("UNLABELED_USE_CALIBRATED_IOUS", False):
+                    gt_iou_of_rois[ulb_interval_mask]  = (gt_iou_of_rois[ulb_interval_mask] - cls_bg_thresh) \
+                                                        / (cls_fg_thresh[ulb_interval_mask] - cls_bg_thresh)
+                
                 self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] = gt_iou_of_rois
-                self.forward_ret_dict['interval_mask'][unlabeled_inds] = ~(ulb_fg_mask | ulb_bg_mask)
-
-                # ----------- REG_VALID_MASK -----------
-                reg_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_REG_FG_THRESH
-                filtering_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] > reg_fg_thresh
-                self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] = filtering_mask.long()
+                self.forward_ret_dict['interval_mask'][unlabeled_inds] = ulb_interval_mask
 
             rcnn_bg_score_teacher = 1 - self.forward_ret_dict['rcnn_cls_score_teacher']  # represents the bg score
             self.forward_ret_dict['rcnn_cls_weights'] = torch.ones_like(self.forward_ret_dict['rcnn_cls_labels'])
@@ -542,9 +552,14 @@ class RoIHeadTemplate(nn.Module):
                 unlabeled_rcnn_cls_weights[ul_interval_mask] = 0
             elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'full-ema':
                 unlabeled_rcnn_cls_weights = rcnn_bg_score_teacher[unlabeled_inds]
-            # Use weights=teacher's BG scores on all except FGs(for FGs, weights=1)
+            # Use 1s for FG mask, teacher's BG scores for UC+BG mask
             elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'uc-bg':           
                 ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
+                unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
+            # Use teacher's FG scores for FG mask, teacher's BG scores for UC+BG mask
+            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-uc-bg':           
+                ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
+                unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
                 unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
             else:
                 raise ValueError
