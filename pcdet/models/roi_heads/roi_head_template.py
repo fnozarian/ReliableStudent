@@ -286,8 +286,9 @@ class RoIHeadTemplate(nn.Module):
         if 'roi_pl' in pred_type:
             tag = f'rcnn_roi_pl_metrics_{mask_type}'
             metrics_roi_pl = metric_registry.get(tag)
-            metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores,
-                                    'ground_truths': sample_pls, 'pred_weights': sample_pred_weights}
+            metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores, 'ground_truths': sample_pls,
+                                    'targets': sample_targets, 'target_scores': sample_target_scores,
+                                    'pred_weights': sample_pred_weights}
             metrics_roi_pl.update(**metric_inputs_roi_pl)
         if 'pred_pl' in pred_type:
             tag = f'rcnn_pred_pl_metrics_{mask_type}'
