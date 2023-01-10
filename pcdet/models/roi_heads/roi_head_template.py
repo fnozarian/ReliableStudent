@@ -542,6 +542,10 @@ class RoIHeadTemplate(nn.Module):
                 unlabeled_rcnn_cls_weights[ul_interval_mask] = 0
             elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'full-ema':
                 unlabeled_rcnn_cls_weights = rcnn_bg_score_teacher[unlabeled_inds]
+            # Use weights=teacher's BG scores on all except FGs(for FGs, weights=1)
+            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'uc-bg':           
+                ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
+                unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
             else:
                 raise ValueError
 
