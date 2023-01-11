@@ -211,6 +211,7 @@ MODEL:
             UNLABELED_SAMPLE_EASY_BG: False
             UNLABELED_SHARP_RCNN_CLS_LABELS: False
             UNLABELED_USE_CALIBRATED_IOUS: False
+            UNLABELED_TEACHER_SCORES_FOR_RVM: False
 
         LOSS_CONFIG:
             UL_RCNN_CLS_WEIGHT_TYPE: 'interval-only' # two options: `all` or `interval-only`

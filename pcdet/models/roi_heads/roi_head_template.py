@@ -509,7 +509,10 @@ class RoIHeadTemplate(nn.Module):
                 
                 # ----------- REG_VALID_MASK -----------
                 reg_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_REG_FG_THRESH
-                filtering_mask = gt_iou_of_rois > reg_fg_thresh
+                if self.model_cfg.TARGET_CONFIG.get("UNLABELED_TEACHER_SCORES_FOR_RVM", False):
+                    filtering_mask = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds] > reg_fg_thresh
+                else:
+                    filtering_mask = gt_iou_of_rois > reg_fg_thresh
                 self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] = filtering_mask.long()
 
                 # ----------- RCNN_CLS_LABELS -----------
