@@ -225,6 +225,16 @@ MODEL:
                 'rcnn_corner_weight': 1.0,
                 'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
             }
+        
+        ROI_AUG:
+            ENABLE: False
+            ROS:
+                SCALE_RANGE: [0.9, 1.1]
+                ROTATE_RANGE: [0, 0] 
+                SAME_SCALE_XYZ: True
+            TRANSLATE:
+                SCALE: [0.25, 0.25, 0.25]
+
 
     POST_PROCESSING:
         RECALL_THRESH_LIST: [0.3, 0.5, 0.7]

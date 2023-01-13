@@ -392,3 +392,44 @@ def rotate_objects(gt_boxes, points, gt_boxes_mask, rotation_perturb, prob, num_
         gt_boxes[idx] = rot_box[try_idx]
 
     return gt_boxes, points
+
+'''
+Apply random object scaling on the ROI dimensions (length, width and height)
+It provides option to scale all the three dimsnions differently as well as rotate the heading angle
+'''
+def roi_aug_ros(rois, roi_cfg):
+    roi_scale_range = roi_cfg.ROI_AUG.ROS.SCALE_RANGE
+    if not (roi_scale_range[0] == roi_scale_range[1] == 1):
+        if roi_cfg.ROI_AUG.ROS.get('SAME_SCALE_XYZ', False):
+            roi_scale_factor = roi_scale_range[0] + torch.rand_like(rois[:,:,3]) * (roi_scale_range[1] - roi_scale_range[0])
+            roi_scale_factor = roi_scale_factor.unsqueeze(-1)
+        else:
+            roi_scale_factor = roi_scale_range[0] + torch.rand_like(rois[:,:,3:6]) * (roi_scale_range[1] - roi_scale_range[0])
+        rois[...,3:6] *= roi_scale_factor
+    roi_rotate_range = roi_cfg.ROI_AUG.ROS.ROTATE_RANGE
+    if not (roi_rotate_range[0] == roi_rotate_range[1] == 0):
+        roi_rotate_angle = roi_rotate_range[0] + torch.rand_like(rois[:,:,6]) * (roi_rotate_range[1] - roi_rotate_range[0])
+        rois[...,6] += roi_rotate_angle
+    return rois
+
+'''
+Perform translation operation along all three axis on ROIs
+Currently, it translates the center of ROIs along all 3 axis with different scale
+TODO (shashank) : Need to check how translation along z-axis would affect the points
+'''
+def roi_aug_translate(rois, roi_cfg):
+    trans_factor = torch.normal(mean=0.0, std=torch.Tensor(roi_cfg.ROI_AUG.TRANSLATE.SCALE))
+    rois[...,:3] += trans_factor.cuda()
+    return rois
+
+'''
+Used to augment ROIs before ROI grid pooling in pvrcnnhead
+'''
+def augment_rois(rois, roi_cfg, aug_type="ros"):
+    if aug_type == "ros":
+        aug_rois = roi_aug_ros(rois, roi_cfg)
+    elif aug_type == "translate":
+        aug_rois = roi_aug_translate(rois, roi_cfg)   
+    else :
+        raise Exception("ROI augmentation not found : {}".format(aug_type))
+    return aug_rois
