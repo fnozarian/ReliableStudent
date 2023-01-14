@@ -4,7 +4,7 @@ import os
 import numpy as np
 import torch
 import torch.nn.functional as F
-from pcdet.datasets.augmentor.augmentor_utils import *
+from pcdet.datasets.augmentor import augmentor_utils
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 
 from ...utils import common_utils
@@ -196,7 +196,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                                 batch_dict_ema_wa['cls_preds_normalized'] = batch_dict_ema['cls_preds_normalized']
 
                                 enable = [1] * len(unlabeled_inds)
-                                batch_dict_ema_wa['batch_box_preds'][unlabeled_inds] = random_flip_along_x_bbox(
+                                batch_dict_ema_wa['batch_box_preds'][unlabeled_inds] = augmentor_utils.random_flip_along_x_bbox(
                                     batch_dict_ema_wa['batch_box_preds'][unlabeled_inds],
                                     enables=enable)
                             else:
@@ -207,7 +207,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                             batch_dict_ema = cur_module(batch_dict_ema)
                             batch_dict_ema_wa = cur_module(batch_dict_ema_wa)
                     # Reverse preds of wa input to match their original (no-aug) preds
-                    batch_dict_ema_wa['batch_box_preds'][unlabeled_inds] = random_flip_along_x_bbox(
+                    batch_dict_ema_wa['batch_box_preds'][unlabeled_inds] = augmentor_utils.random_flip_along_x_bbox(
                         batch_dict_ema_wa['batch_box_preds'][unlabeled_inds], [1] * len(unlabeled_inds))
 
                     # pseudo-labels used for training rpn head
@@ -349,10 +349,11 @@ class PVRCNN_SSL(Detector3DTemplate):
 
                     # Perturb Student's ROIs before using them for Teacher's ROI head
                     if self.model_cfg.ROI_HEAD.ROI_AUG.get('ENABLE', False):
+                        augment_rois = getattr(augmentor_utils, self.model_cfg.ROI_HEAD.ROI_AUG.AUG_TYPE, augmentor_utils.roi_aug_ros)
                         # rois_before_aug is used only for debugging, can be removed later
                         batch_dict_std['rois_before_aug'] = batch_dict_std['rois'].clone().detach()
                         batch_dict_std['rois'][unlabeled_inds] = \
-                            augment_rois(batch_dict_std['rois'][unlabeled_inds], self.model_cfg.ROI_HEAD, aug_type='ros')
+                            augment_rois(batch_dict_std['rois'][unlabeled_inds], self.model_cfg.ROI_HEAD)
 
                     self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
                                                       disable_gt_roi_when_pseudo_labeling=True)
@@ -638,13 +639,13 @@ class PVRCNN_SSL(Detector3DTemplate):
             batch_dict[key] = new_boxes
 
     def apply_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key='rois'):
-        batch_dict[key][unlabeled_inds] = random_flip_along_x_bbox(
+        batch_dict[key][unlabeled_inds] = augmentor_utils.random_flip_along_x_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
-        batch_dict[key][unlabeled_inds] = random_flip_along_y_bbox(
+        batch_dict[key][unlabeled_inds] = augmentor_utils.random_flip_along_y_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['flip_y'][unlabeled_inds])
-        batch_dict[key][unlabeled_inds] = global_rotation_bbox(
+        batch_dict[key][unlabeled_inds] = augmentor_utils.global_rotation_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['rot_angle'][unlabeled_inds])
-        batch_dict[key][unlabeled_inds] = global_scaling_bbox(
+        batch_dict[key][unlabeled_inds] = augmentor_utils.global_scaling_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['scale'][unlabeled_inds])
 
         batch_dict[key][unlabeled_inds, :, 6] = common_utils.limit_period(
@@ -654,13 +655,13 @@ class PVRCNN_SSL(Detector3DTemplate):
         return batch_dict
 
     def reverse_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key='rois'):
-        batch_dict[key][unlabeled_inds] = global_scaling_bbox(
+        batch_dict[key][unlabeled_inds] = augmentor_utils.global_scaling_bbox(
             batch_dict[key][unlabeled_inds], 1.0 / batch_dict_org['scale'][unlabeled_inds])
-        batch_dict[key][unlabeled_inds] = global_rotation_bbox(
+        batch_dict[key][unlabeled_inds] = augmentor_utils.global_rotation_bbox(
             batch_dict[key][unlabeled_inds], - batch_dict_org['rot_angle'][unlabeled_inds])
-        batch_dict[key][unlabeled_inds] = random_flip_along_y_bbox(
+        batch_dict[key][unlabeled_inds] = augmentor_utils.random_flip_along_y_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['flip_y'][unlabeled_inds])
-        batch_dict[key][unlabeled_inds] = random_flip_along_x_bbox(
+        batch_dict[key][unlabeled_inds] = augmentor_utils.random_flip_along_x_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
 
         batch_dict[key][unlabeled_inds, :, 6] = common_utils.limit_period(

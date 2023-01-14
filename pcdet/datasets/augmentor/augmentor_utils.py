@@ -421,15 +421,3 @@ def roi_aug_translate(rois, roi_cfg):
     trans_factor = torch.normal(mean=0.0, std=torch.Tensor(roi_cfg.ROI_AUG.TRANSLATE.SCALE))
     rois[...,:3] += trans_factor.cuda()
     return rois
-
-'''
-Used to augment ROIs before ROI grid pooling in pvrcnnhead
-'''
-def augment_rois(rois, roi_cfg, aug_type="ros"):
-    if aug_type == "ros":
-        aug_rois = roi_aug_ros(rois, roi_cfg)
-    elif aug_type == "translate":
-        aug_rois = roi_aug_translate(rois, roi_cfg)   
-    else :
-        raise Exception("ROI augmentation not found : {}".format(aug_type))
-    return aug_rois

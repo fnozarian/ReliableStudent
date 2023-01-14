@@ -228,6 +228,7 @@ MODEL:
         
         ROI_AUG:
             ENABLE: False
+            AUG_TYPE: roi_aug_ros
             ROS:
                 SCALE_RANGE: [0.9, 1.1]
                 ROTATE_RANGE: [0, 0] 
