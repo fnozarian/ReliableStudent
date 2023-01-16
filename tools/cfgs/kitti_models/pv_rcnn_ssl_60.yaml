@@ -245,7 +245,7 @@ MODEL:
     SEM_THRESH: [0.2, 0.0, 0.0]
     SUPERVISE_MODE: 0
     NO_NMS: False
-    EMA_ALPHA: 0.99
+    EMA_ALPHA: 0.999
     EMA_UPDATE_INTERVAL: 1 
 
 

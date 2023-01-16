@@ -679,8 +679,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             return
         alpha = self.model_cfg.EMA_ALPHA
         # Use the true average until the exponential average is more correct
-        if alpha == 0.99:
-            alpha = min(1 - 1 / (self.global_step + 1), alpha)
+        alpha = min(1 - 1 / (self.global_step + 1), alpha)
         for ema_param, param in zip(self.pv_rcnn_ema.parameters(), self.pv_rcnn.parameters()):
             # TODO(farzad) check this
             ema_param.data.mul_(alpha).add_((1 - alpha) * param.data)
