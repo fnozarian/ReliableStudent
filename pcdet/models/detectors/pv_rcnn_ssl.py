@@ -103,15 +103,15 @@ class MetricRegistry(object):
         self._tag_metrics = {}
         self.dataset = kwargs.get('dataset', None)
         self.cls_bg_thresh = kwargs.get('cls_bg_thresh', None)
-
+        self.model_cfg = kwargs.get('model_cfg', None)
     def get(self, tag=None):
         if tag is None:
             tag = 'default'
         if tag in self._tag_metrics.keys():
             metric = self._tag_metrics[tag]
         else:
-            kitti_eval_metric = KITTIEvalMetrics(tag=tag, dataset=self.dataset)
-            pred_qual_metric = PredQualityMetrics(tag=tag, dataset=self.dataset, cls_bg_thresh=self.cls_bg_thresh)
+            kitti_eval_metric = KITTIEvalMetrics(tag=tag, dataset=self.dataset, config=self.model_cfg)
+            pred_qual_metric = PredQualityMetrics(tag=tag, dataset=self.dataset, cls_bg_thresh=self.cls_bg_thresh, config=self.model_cfg)
             metric = MetricCollection({"kitti_eval_metric": kitti_eval_metric,
                                        "pred_quality_metric": pred_qual_metric})
             self._tag_metrics[tag] = metric
@@ -146,7 +146,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.no_nms = model_cfg.NO_NMS
         self.supervise_mode = model_cfg.SUPERVISE_MODE
         cls_bg_thresh = model_cfg.ROI_HEAD.TARGET_CONFIG.CLS_BG_THRESH
-        self.metric_registry = MetricRegistry(dataset=self.dataset, cls_bg_thresh=cls_bg_thresh)
+        self.metric_registry = MetricRegistry(dataset=self.dataset, model_cfg=model_cfg)
 
     def forward(self, batch_dict):
         if self.training:

@@ -30,21 +30,23 @@ class PredQualityMetrics(Metric):
         self.reset_state_interval = kwargs.get('reset_state_interval', 64)
         self.tag = kwargs.get('tag', None)
         self.dataset = kwargs.get('dataset', None)
-        self.cls_bg_thresh = kwargs.get('cls_bg_thresh',  0.25)
+        self.config = kwargs.get('config', None)
         self.metrics_name = ["pred_ious", "pred_accs", "pred_precision", "pred_recall", "num_correctly_classified",
                              "num_misclassified_fp", "num_misclassified_fn", "pred_fgs", "sem_score_fgs",
                              "sem_score_bgs", "score_fgs", "score_bgs", "target_score_fg", "target_score_mc_fg",
                              "target_score_bg", "num_pred_boxes", "num_gt_boxes",
                              "pred_weight_fg", "pred_weight_mc_fg", "pred_weight_bg",
                              "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc", "pred_weight_uc",
-                             "pred_fgs_mc", "pred_ious_mc", "score_fgs_mc", "target_score_mc_fg", ]
+                             "pred_fgs_mc", "pred_ious_mc", "score_fgs_mc", "pred_weight_fp", "target_score_fp",
+                             "score_fgs_fp", "pred_ious_fp", "pred_fgs_fp"]
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
         self.class_agnostic_fg_thresh = 0.7
         for metric_name in self.metrics_name:
             self.add_state(metric_name, default=[], dist_reduce_fx='cat')
 
     def update(self, preds: [torch.Tensor], ground_truths: [torch.Tensor], pred_scores: [torch.Tensor],
-               rois=None, roi_scores=None, targets=None, target_scores=None, pred_weights=None) -> None:
+               rois=None, roi_scores=None, targets=None, target_scores=None, pred_weights=None,
+               pseudo_labels=None, pseudo_label_scores=None, iou_wrt_pl=False) -> None:
         assert isinstance(preds, list) and isinstance(ground_truths, list) and isinstance(pred_scores, list)
         assert all([pred.dim() == 2 for pred in preds]) and all([pred.dim() == 2 for pred in ground_truths]) and all([pred.dim() == 1 for pred in pred_scores])
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([gt.shape[-1] == 8 for gt in ground_truths])
@@ -56,6 +58,7 @@ class PredQualityMetrics(Metric):
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
         target_scores = [target_score.clone().detach() for target_score in target_scores] if target_scores is not None else None
         ground_truths = [gt_box.clone().detach() for gt_box in ground_truths]
+        pseudo_labels = [pl_box.clone().detach() for pl_box in pseudo_labels] if pseudo_labels is not None else None
         pred_weights = [pred_weight.clone().detach() for pred_weight in pred_weights] if pred_weights is not None else None
 
         sample_tensor = preds[0] if len(preds) else ground_truths[0]
@@ -72,6 +75,8 @@ class PredQualityMetrics(Metric):
                 target_scores[i] = target_scores[i].unsqueeze(dim=-1)
             if pred_weights is not None and pred_weights[i].ndim == 1:
                 pred_weights[i] = pred_weights[i].unsqueeze(dim=-1)
+            if pseudo_label_scores is not None and pseudo_label_scores[i].ndim == 1:
+                pseudo_label_scores[i] = pseudo_label_scores[i].unsqueeze(dim=-1)
 
             valid_pred_scores = pred_scores[i][valid_preds_mask.nonzero().view(-1)]
             valid_roi_scores = roi_scores[i][valid_preds_mask.nonzero().view(-1)] if roi_scores else None
@@ -80,6 +85,10 @@ class PredQualityMetrics(Metric):
 
             valid_gts_mask = torch.logical_not(torch.all(ground_truths[i] == 0, dim=-1))
             valid_gt_boxes = ground_truths[i][valid_gts_mask]
+            if pseudo_labels is not None:
+                valid_pl_mask = torch.logical_not(torch.all(pseudo_labels[i] == 0, dim=-1))
+                valid_pl_boxes = pseudo_labels[i][valid_pl_mask] if pseudo_labels else None
+                valid_pl_boxes[:, -1] -= 1
 
             # Starting class indices from zero
             valid_pred_boxes[:, -1] -= 1
@@ -115,7 +124,7 @@ class PredQualityMetrics(Metric):
                     # Using kitti test class-wise fg threshold instead of thresholds used during train.
                     classwise_fg_thresh = self.min_overlaps[cind]
                     fg_mask = preds_iou_max >= classwise_fg_thresh
-                    bg_mask = preds_iou_max <= self.cls_bg_thresh
+                    bg_mask = preds_iou_max <= self.config.ROI_HEAD.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH
                     uc_mask = ~(bg_mask | fg_mask)  # uncertain mask
 
                     cc_fg_mask = fg_mask & cc_mask
@@ -140,51 +149,61 @@ class PredQualityMetrics(Metric):
                         valid_roi_scores = torch.sigmoid(valid_roi_scores)
                         cls_sem_score_fg = (valid_roi_scores.squeeze() * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
                         classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
-
                         cls_sem_score_bg = (valid_roi_scores.squeeze() * cc_bg_mask.float()).sum() / cc_bg_mask.float().sum()
                         classwise_metrics['sem_score_bgs'][cind] = cls_sem_score_bg
-
                         cls_sem_score_uc = (valid_roi_scores.squeeze() * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['sem_score_ucs'][cind] = cls_sem_score_uc
 
                     if valid_target_scores is not None:
                         cls_target_score_bg = (valid_target_scores.squeeze() * cc_bg_mask.float()).sum() / cc_bg_mask.float().sum()
                         classwise_metrics['target_score_bg'][cind] = cls_target_score_bg
-
                         cls_target_score_uc = (valid_target_scores.squeeze() * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['target_score_uc'][cind] = cls_target_score_uc
-
-                        fg_wrt_pl_mask = valid_target_scores.squeeze() == 1.
-                        # Misclassified FG mask for faulty preds which are FG wrt GT,
-                        # but not FGs wrt classwise thresholding on rcnn_cls_labels
-                        mc_fg_mask = ~fg_wrt_pl_mask & cc_fg_mask
-                        tp_fg_mask = fg_wrt_pl_mask & cc_fg_mask
-                        classwise_metrics['pred_fgs_mc'][cind] = mc_fg_mask.sum() / cc_fg_mask.sum()
-                        classwise_metrics['pred_ious_mc'][cind] = (preds_iou_max * mc_fg_mask.float()).sum() / mc_fg_mask.sum()
-                        cls_score_fg = (valid_pred_scores.squeeze() * mc_fg_mask.float()).sum() / mc_fg_mask.sum()
-                        classwise_metrics['score_fgs_mc'][cind] = cls_score_fg
-                        cls_target_score_fg = (valid_target_scores.squeeze() * tp_fg_mask.float()).sum() / tp_fg_mask.sum()
-                        classwise_metrics['target_score_fg'][cind] = cls_target_score_fg
-                        cls_target_score_mc_fg = (valid_target_scores.squeeze() * mc_fg_mask).sum() / mc_fg_mask.float().sum()
-                        classwise_metrics['target_score_mc_fg'][cind] = cls_target_score_mc_fg
 
                     if valid_pred_weights is not None:
                         cls_pred_weight_bg = (valid_pred_weights.squeeze() * cc_bg_mask.float()).sum() / cc_bg_mask.float().sum()
                         classwise_metrics['pred_weight_bg'][cind] = cls_pred_weight_bg
-
                         cls_pred_weight_uc = (valid_pred_weights.squeeze() * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['pred_weight_uc'][cind] = cls_pred_weight_uc
+                        cls_pred_weight_fg = (valid_pred_weights.squeeze() * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
+                        classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_fg
 
+                    if iou_wrt_pl and pseudo_labels is not None and valid_pl_mask.sum() > 0:
+                        overlap_wrt_pl = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_pl_boxes[:, 0:7])
+                        preds_iou_pl_max, assigned_pl_inds = overlap_wrt_pl.max(dim=1)
+                        fg_threshs = self.config.ROI_HEAD.TARGET_CONFIG.UNLABELED_CLS_FG_THRESH
+                        bg_thresh = self.config.ROI_HEAD.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH
+                        classwise_fg_thresh = fg_threshs[cind]
+                        fg_mask_wrt_pl = preds_iou_pl_max >= classwise_fg_thresh
+                        bg_mask_wrt_pl = preds_iou_pl_max <= bg_thresh
+                        uc_mask_wrt_pl = ~(bg_mask_wrt_pl | fg_mask_wrt_pl)  # uncertain mask
+
+                        # ------ Foreground Mis-classification Metrics ------
+                        fg_mc_mask = ~fg_mask_wrt_pl & cc_fg_mask
+                        fg_tp_mask = fg_mask_wrt_pl & cc_fg_mask
+                        fg_fp_mask = fg_mask_wrt_pl & ~cc_fg_mask
+                        classwise_metrics['pred_fgs_mc'][cind] = fg_mc_mask.sum() / cc_fg_mask.sum()
+                        classwise_metrics['pred_fgs_fp'][cind] = fg_fp_mask.sum() / fg_mask_wrt_pl.sum()
+                        classwise_metrics['pred_ious_mc'][cind] = (preds_iou_pl_max * fg_mc_mask.float()).sum() / fg_mc_mask.sum()
+                        classwise_metrics['pred_ious_fp'][cind] = (preds_iou_pl_max * fg_fp_mask.float()).sum() / fg_fp_mask.sum()
+                        cls_score_fg_mc = (valid_pred_scores.squeeze() * fg_mc_mask.float()).sum() / fg_mc_mask.sum()
+                        cls_score_fg_fp = (valid_pred_scores.squeeze() * fg_fp_mask.float()).sum() / fg_fp_mask.sum()
+                        classwise_metrics['score_fgs_mc'][cind] = cls_score_fg_mc
+                        classwise_metrics['score_fgs_fp'][cind] = cls_score_fg_fp
                         if valid_target_scores is not None:
-                            # teacher's weights of faulty preds assigned as BG but were actually FG
-                            cls_pred_weight_mc_fg = (valid_pred_weights.squeeze() * mc_fg_mask).sum() / mc_fg_mask.float().sum()
-                            classwise_metrics['pred_weight_mc_fg'][cind] = cls_pred_weight_mc_fg
-                            # teacher's weights of correct preds assigned as BG but were actually FG
-                            cls_pred_weight_cc_fg = (valid_pred_weights.squeeze() * tp_fg_mask).sum() / tp_fg_mask.float().sum()
+                            cls_target_score_fg_mc = (valid_target_scores.squeeze() * fg_mc_mask.float()).sum() / fg_mc_mask.sum()
+                            classwise_metrics['target_score_mc_fg'][cind] = cls_target_score_fg_mc
+                            cls_target_score_fg = (valid_target_scores.squeeze() * fg_tp_mask.float()).sum() / fg_tp_mask.sum()
+                            classwise_metrics['target_score_fg'][cind] = cls_target_score_fg
+                            cls_target_score_fp = (valid_target_scores.squeeze() * fg_fp_mask.float()).sum() / fg_fp_mask.sum()
+                            classwise_metrics['target_score_fp'][cind] = cls_target_score_fp
+                        if valid_pred_weights is not None:
+                            cls_pred_weight_fg_mc = (valid_pred_weights.squeeze() * fg_mc_mask.float()).sum() / fg_mc_mask.sum()
+                            classwise_metrics['pred_weight_mc_fg'][cind] = cls_pred_weight_fg_mc
+                            cls_pred_weight_cc_fg = (valid_pred_weights.squeeze() * fg_tp_mask).sum() / fg_tp_mask.float().sum()
                             classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_cc_fg
-                        else:
-                            cls_pred_weight_fg = (valid_pred_weights.squeeze() * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
-                            classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_fg
+                            cls_pred_weight_cc_fp = (valid_pred_weights.squeeze() * fg_fp_mask).sum() / fg_fp_mask.float().sum()
+                            classwise_metrics['pred_weight_fp'][cind] = cls_pred_weight_cc_fp
 
             for key, val in classwise_metrics.items():
                 # Note that unsqueeze is necessary because torchmetric performs the dist cat on dim 0.
@@ -250,7 +269,8 @@ class KITTIEvalMetrics(Metric):
         self.add_state("overlaps", default=[])
 
     def update(self, preds: [torch.Tensor], pred_scores: [torch.Tensor], ground_truths: [torch.Tensor],
-               rois=None, roi_scores=None, targets=None, target_scores=None) -> None:
+               rois=None, roi_scores=None, targets=None, target_scores=None, pred_weights=None,
+               pseudo_labels=None, pseudo_label_scores=None, iou_wrt_pl=False) -> None:
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in ground_truths])
         if roi_scores is not None:
             assert len(pred_scores) == len(roi_scores)
