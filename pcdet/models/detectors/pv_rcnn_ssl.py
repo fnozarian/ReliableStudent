@@ -135,6 +135,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             param.detach_()
         self.add_module('pv_rcnn', self.pv_rcnn)
         self.add_module('pv_rcnn_ema', self.pv_rcnn_ema)
+        self.accumulated_itr = 0
 
         # self.module_list = self.build_networks()
         # self.module_list_ema = self.build_networks()
@@ -681,12 +682,16 @@ class PVRCNN_SSL(Detector3DTemplate):
 
     def update_global_step(self):
         self.global_step += 1
-        alpha = 0.999
+        self.accumulated_itr += 1
+        if self.accumulated_itr % self.model_cfg.EMA_UPDATE_INTERVAL != 0:
+            return
+        alpha = self.model_cfg.EMA_ALPHA
         # Use the true average until the exponential average is more correct
         alpha = min(1 - 1 / (self.global_step + 1), alpha)
         for ema_param, param in zip(self.pv_rcnn_ema.parameters(), self.pv_rcnn.parameters()):
             # TODO(farzad) check this
             ema_param.data.mul_(alpha).add_((1 - alpha) * param.data)
+        self.accumulated_itr = 0
 
     def load_params_from_file(self, filename, logger, to_cpu=False):
         if not os.path.isfile(filename):
