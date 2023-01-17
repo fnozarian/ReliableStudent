@@ -38,7 +38,7 @@ class PredQualityMetrics(Metric):
         self.metrics_name = ["pred_ious", "pred_fgs", "sem_score_fgs", "sem_score_bgs", "score_fgs", "score_bgs",
                              "target_score_bg", "num_pred_boxes", "num_gt_boxes", "pred_weight_fg", "pred_weight_bg",
                              "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc",
-                             "pred_weight_uc", "pred_fn_rate", "pred_tp_rate", "pred_fp_rate", "pred_ious_wrt_pl_fg",
+                             "pred_weight_uc", "pred_fn_rate", "pred_tp_rate", "pred_fp_ratio", "pred_ious_wrt_pl_fg",
                              "pred_ious_wrt_pl_fn", "pred_ious_wrt_pl_fp", "pred_ious_wrt_pl_tp", "score_fgs_tp",
                              "score_fgs_fn", "score_fgs_fp", "target_score_fn", "target_score_tp", "target_score_fp",
                              "pred_weight_fn", "pred_weight_tp", "pred_weight_fp"]
@@ -177,7 +177,7 @@ class PredQualityMetrics(Metric):
                         fp_mask = cls_fg_mask_wrt_pl & (bg_mask | cc_uc_mask)
                         classwise_metrics['pred_fn_rate'][cind] = fn_mask.sum() / cc_fg_mask.sum()
                         classwise_metrics['pred_tp_rate'][cind] = tp_mask.sum() / cc_fg_mask.sum()
-                        classwise_metrics['pred_fp_rate'][cind] = fp_mask.sum() / (bg_mask | cc_uc_mask).sum()
+                        classwise_metrics['pred_fp_ratio'][cind] = fp_mask.sum() / cls_fg_mask_wrt_pl.sum()
                         classwise_metrics['pred_ious_wrt_pl_fg'][cind] = (valid_pred_iou_wrt_pl * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
                         classwise_metrics['pred_ious_wrt_pl_fn'][cind] = (valid_pred_iou_wrt_pl * fn_mask.float()).sum() / fn_mask.sum()
                         classwise_metrics['pred_ious_wrt_pl_fp'][cind] = (valid_pred_iou_wrt_pl * fp_mask.float()).sum() / fp_mask.sum()
