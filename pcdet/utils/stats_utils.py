@@ -31,14 +31,17 @@ class PredQualityMetrics(Metric):
         self.tag = kwargs.get('tag', None)
         self.dataset = kwargs.get('dataset', None)
         self.config = kwargs.get('config', None)
-        self.metrics_name = ["pred_ious", "pred_accs", "pred_precision", "pred_recall", "num_correctly_classified",
-                             "num_misclassified_fp", "num_misclassified_fn", "pred_fgs", "sem_score_fgs",
-                             "sem_score_bgs", "score_fgs", "score_bgs", "target_score_fg", "target_score_mc_fg",
-                             "target_score_bg", "num_pred_boxes", "num_gt_boxes",
-                             "pred_weight_fg", "pred_weight_mc_fg", "pred_weight_bg",
-                             "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc", "pred_weight_uc",
-                             "pred_fgs_mc", "pred_ious_mc", "score_fgs_mc", "pred_weight_fp", "target_score_fp",
-                             "score_fgs_fp", "pred_ious_fp", "pred_fgs_fp"]
+        # We use _fg, _bg and _uc if a pred is fg, bg or uc wrt ground truth, respectively.
+        # We use _tp if a pred is fg wrt gt and fg wrt pl.
+        # We use _fn if a pred is fg wrt gt and not fg wrt pl.
+        # We use _fp if a pred is not fg wrt gt and fg wrt pl.
+        self.metrics_name = ["pred_ious", "pred_fgs", "sem_score_fgs", "sem_score_bgs", "score_fgs", "score_bgs",
+                             "target_score_bg", "num_pred_boxes", "num_gt_boxes", "pred_weight_fg", "pred_weight_bg",
+                             "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc",
+                             "pred_weight_uc", "pred_fn_rate", "pred_tp_rate", "pred_fp_rate", "pred_ious_wrt_pl_fg",
+                             "pred_ious_wrt_pl_fn", "pred_ious_wrt_pl_fp", "pred_ious_wrt_pl_tp", "score_fgs_tp",
+                             "score_fgs_fn", "score_fgs_fp", "target_score_fn", "target_score_tp", "target_score_fp",
+                             "pred_weight_fn", "pred_weight_tp", "pred_weight_fp"]
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
         self.class_agnostic_fg_thresh = 0.7
         for metric_name in self.metrics_name:
@@ -46,7 +49,7 @@ class PredQualityMetrics(Metric):
 
     def update(self, preds: [torch.Tensor], ground_truths: [torch.Tensor], pred_scores: [torch.Tensor],
                rois=None, roi_scores=None, targets=None, target_scores=None, pred_weights=None,
-               pseudo_labels=None, pseudo_label_scores=None, iou_wrt_pl=False) -> None:
+               pseudo_labels=None, pseudo_label_scores=None, pred_iou_wrt_pl=None) -> None:
         assert isinstance(preds, list) and isinstance(ground_truths, list) and isinstance(pred_scores, list)
         assert all([pred.dim() == 2 for pred in preds]) and all([pred.dim() == 2 for pred in ground_truths]) and all([pred.dim() == 1 for pred in pred_scores])
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([gt.shape[-1] == 8 for gt in ground_truths])
@@ -56,6 +59,7 @@ class PredQualityMetrics(Metric):
         roi_scores = [score.clone().detach() for score in roi_scores] if roi_scores is not None else None
         preds = [pred_box.clone().detach() for pred_box in preds]
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
+        pred_iou_wrt_pl = [iou.clone().detach() for iou in pred_iou_wrt_pl] if pred_iou_wrt_pl is not None else None
         target_scores = [target_score.clone().detach() for target_score in target_scores] if target_scores is not None else None
         ground_truths = [gt_box.clone().detach() for gt_box in ground_truths]
         pseudo_labels = [pl_box.clone().detach() for pl_box in pseudo_labels] if pseudo_labels is not None else None
@@ -67,22 +71,11 @@ class PredQualityMetrics(Metric):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
             valid_pred_boxes = preds[i][valid_preds_mask]
 
-            if pred_scores[i].ndim == 1:
-                pred_scores[i] = pred_scores[i].unsqueeze(dim=-1)
-            if roi_scores is not None and roi_scores[i].ndim == 1:
-                roi_scores[i] = roi_scores[i].unsqueeze(dim=-1)
-            if target_scores is not None and target_scores[i].ndim == 1:
-                target_scores[i] = target_scores[i].unsqueeze(dim=-1)
-            if pred_weights is not None and pred_weights[i].ndim == 1:
-                pred_weights[i] = pred_weights[i].unsqueeze(dim=-1)
-            if pseudo_label_scores is not None and pseudo_label_scores[i].ndim == 1:
-                pseudo_label_scores[i] = pseudo_label_scores[i].unsqueeze(dim=-1)
-
             valid_pred_scores = pred_scores[i][valid_preds_mask.nonzero().view(-1)]
             valid_roi_scores = roi_scores[i][valid_preds_mask.nonzero().view(-1)] if roi_scores else None
             valid_target_scores = target_scores[i][valid_preds_mask.nonzero().view(-1)] if target_scores else None
             valid_pred_weights = pred_weights[i][valid_preds_mask.nonzero().view(-1)] if pred_weights else None
-
+            valid_pred_iou_wrt_pl = pred_iou_wrt_pl[i][valid_preds_mask.nonzero().view(-1)].squeeze() if pred_iou_wrt_pl else None
             valid_gts_mask = torch.logical_not(torch.all(ground_truths[i] == 0, dim=-1))
             valid_gt_boxes = ground_truths[i][valid_gts_mask]
             if pseudo_labels is not None:
@@ -95,7 +88,7 @@ class PredQualityMetrics(Metric):
             valid_gt_boxes[:, -1] -= 1
 
             # Adding predicted scores as the last column
-            valid_pred_boxes = torch.cat([valid_pred_boxes, valid_pred_scores], dim=-1)
+            valid_pred_boxes = torch.cat([valid_pred_boxes, valid_pred_scores.unsqueeze(dim=-1)], dim=-1)
 
             pred_labels = valid_pred_boxes[:, -2]
 
@@ -130,79 +123,84 @@ class PredQualityMetrics(Metric):
                     cc_fg_mask = fg_mask & cc_mask
                     classwise_metrics['pred_fgs'][cind] = (cc_fg_mask).sum() / cc_mask.sum()
                     classwise_metrics['pred_ious'][cind] = (preds_iou_max * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
-                    cls_score_fg = (valid_pred_scores.squeeze() * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
+                    cls_score_fg = (valid_pred_scores * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
                     classwise_metrics['score_fgs'][cind] = cls_score_fg
 
                     cc_uc_mask = uc_mask & cc_mask
                     classwise_metrics['pred_ucs'][cind] = (cc_uc_mask).sum() / cc_mask.sum()
                     classwise_metrics['pred_ious_ucs'][cind] = (preds_iou_max * cc_uc_mask.float()).sum() / cc_uc_mask.sum()
-                    cls_score_uc = (valid_pred_scores.squeeze() * cc_uc_mask.float()).sum() / (cc_uc_mask).sum()
+                    cls_score_uc = (valid_pred_scores * cc_uc_mask.float()).sum() / (cc_uc_mask).sum()
                     classwise_metrics['score_ucs'][cind] = cls_score_uc
 
-                    cc_bg_mask = bg_mask & cc_mask
-                    cls_score_bg = (valid_pred_scores.squeeze() * cc_bg_mask.float()).sum() / torch.clamp(cc_bg_mask.float().sum(), min=1.0)
+                    cls_score_bg = (valid_pred_scores * bg_mask.float()).sum() / torch.clamp(bg_mask.float().sum(), min=1.0)
                     classwise_metrics['score_bgs'][cind] = cls_score_bg
 
                     # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
                     # while without clamp it is N/A, which makes more sense.
                     if valid_roi_scores is not None:
                         valid_roi_scores = torch.sigmoid(valid_roi_scores)
-                        cls_sem_score_fg = (valid_roi_scores.squeeze() * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
+                        cls_sem_score_fg = (valid_roi_scores * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
                         classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
-                        cls_sem_score_bg = (valid_roi_scores.squeeze() * cc_bg_mask.float()).sum() / cc_bg_mask.float().sum()
+                        cls_sem_score_bg = (valid_roi_scores * bg_mask.float()).sum() / bg_mask.float().sum()
                         classwise_metrics['sem_score_bgs'][cind] = cls_sem_score_bg
-                        cls_sem_score_uc = (valid_roi_scores.squeeze() * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
+                        cls_sem_score_uc = (valid_roi_scores * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['sem_score_ucs'][cind] = cls_sem_score_uc
 
                     if valid_target_scores is not None:
-                        cls_target_score_bg = (valid_target_scores.squeeze() * cc_bg_mask.float()).sum() / cc_bg_mask.float().sum()
+                        cls_target_score_bg = (valid_target_scores * bg_mask.float()).sum() / bg_mask.float().sum()
                         classwise_metrics['target_score_bg'][cind] = cls_target_score_bg
-                        cls_target_score_uc = (valid_target_scores.squeeze() * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
+                        cls_target_score_uc = (valid_target_scores * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['target_score_uc'][cind] = cls_target_score_uc
 
                     if valid_pred_weights is not None:
-                        cls_pred_weight_bg = (valid_pred_weights.squeeze() * cc_bg_mask.float()).sum() / cc_bg_mask.float().sum()
+                        cls_pred_weight_bg = (valid_pred_weights * bg_mask.float()).sum() / bg_mask.float().sum()
                         classwise_metrics['pred_weight_bg'][cind] = cls_pred_weight_bg
-                        cls_pred_weight_uc = (valid_pred_weights.squeeze() * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
+                        cls_pred_weight_uc = (valid_pred_weights * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['pred_weight_uc'][cind] = cls_pred_weight_uc
-                        cls_pred_weight_fg = (valid_pred_weights.squeeze() * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
+                        cls_pred_weight_fg = (valid_pred_weights * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
                         classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_fg
 
-                    if iou_wrt_pl and pseudo_labels is not None and valid_pl_mask.sum() > 0:
-                        overlap_wrt_pl = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_pl_boxes[:, 0:7])
-                        preds_iou_pl_max, assigned_pl_inds = overlap_wrt_pl.max(dim=1)
+                    if valid_pred_iou_wrt_pl is not None:
                         fg_threshs = self.config.ROI_HEAD.TARGET_CONFIG.UNLABELED_CLS_FG_THRESH
                         bg_thresh = self.config.ROI_HEAD.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH
                         classwise_fg_thresh = fg_threshs[cind]
-                        fg_mask_wrt_pl = preds_iou_pl_max >= classwise_fg_thresh
-                        bg_mask_wrt_pl = preds_iou_pl_max <= bg_thresh
+                        fg_mask_wrt_pl = valid_pred_iou_wrt_pl >= classwise_fg_thresh
+                        bg_mask_wrt_pl = valid_pred_iou_wrt_pl <= bg_thresh
                         uc_mask_wrt_pl = ~(bg_mask_wrt_pl | fg_mask_wrt_pl)  # uncertain mask
 
+                        cls_fg_mask_wrt_pl = pred_cls_mask & fg_mask_wrt_pl
+                        cls_uc_mask_wrt_pl = pred_cls_mask & uc_mask_wrt_pl
+                        cls_bg_mask_wrt_pl = pred_cls_mask & bg_mask_wrt_pl
                         # ------ Foreground Mis-classification Metrics ------
-                        fg_mc_mask = ~fg_mask_wrt_pl & cc_fg_mask
-                        fg_tp_mask = fg_mask_wrt_pl & cc_fg_mask
-                        fg_fp_mask = fg_mask_wrt_pl & ~cc_fg_mask
-                        classwise_metrics['pred_fgs_mc'][cind] = fg_mc_mask.sum() / cc_fg_mask.sum()
-                        classwise_metrics['pred_fgs_fp'][cind] = fg_fp_mask.sum() / fg_mask_wrt_pl.sum()
-                        classwise_metrics['pred_ious_mc'][cind] = (preds_iou_pl_max * fg_mc_mask.float()).sum() / fg_mc_mask.sum()
-                        classwise_metrics['pred_ious_fp'][cind] = (preds_iou_pl_max * fg_fp_mask.float()).sum() / fg_fp_mask.sum()
-                        cls_score_fg_mc = (valid_pred_scores.squeeze() * fg_mc_mask.float()).sum() / fg_mc_mask.sum()
-                        cls_score_fg_fp = (valid_pred_scores.squeeze() * fg_fp_mask.float()).sum() / fg_fp_mask.sum()
-                        classwise_metrics['score_fgs_mc'][cind] = cls_score_fg_mc
+                        fn_mask = (cls_bg_mask_wrt_pl | cls_uc_mask_wrt_pl) & cc_fg_mask
+                        tp_mask = cls_fg_mask_wrt_pl & cc_fg_mask
+                        fp_mask = cls_fg_mask_wrt_pl & (bg_mask | cc_uc_mask)
+                        classwise_metrics['pred_fn_rate'][cind] = fn_mask.sum() / cc_fg_mask.sum()
+                        classwise_metrics['pred_tp_rate'][cind] = tp_mask.sum() / cc_fg_mask.sum()
+                        classwise_metrics['pred_fp_rate'][cind] = fp_mask.sum() / (bg_mask | cc_uc_mask).sum()
+                        classwise_metrics['pred_ious_wrt_pl_fg'][cind] = (valid_pred_iou_wrt_pl * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
+                        classwise_metrics['pred_ious_wrt_pl_fn'][cind] = (valid_pred_iou_wrt_pl * fn_mask.float()).sum() / fn_mask.sum()
+                        classwise_metrics['pred_ious_wrt_pl_fp'][cind] = (valid_pred_iou_wrt_pl * fp_mask.float()).sum() / fp_mask.sum()
+                        classwise_metrics['pred_ious_wrt_pl_tp'][cind] = (valid_pred_iou_wrt_pl * tp_mask.float()).sum() / tp_mask.sum()
+                        cls_score_fg_fn = (valid_pred_scores * fn_mask.float()).sum() / fn_mask.sum()
+                        cls_score_fg_fp = (valid_pred_scores * fp_mask.float()).sum() / fp_mask.sum()
+                        cls_score_fg_tp = (valid_pred_scores * tp_mask.float()).sum() / tp_mask.sum()
+                        classwise_metrics['score_fgs_tp'][cind] = cls_score_fg_tp
+                        classwise_metrics['score_fgs_fn'][cind] = cls_score_fg_fn
                         classwise_metrics['score_fgs_fp'][cind] = cls_score_fg_fp
                         if valid_target_scores is not None:
-                            cls_target_score_fg_mc = (valid_target_scores.squeeze() * fg_mc_mask.float()).sum() / fg_mc_mask.sum()
-                            classwise_metrics['target_score_mc_fg'][cind] = cls_target_score_fg_mc
-                            cls_target_score_fg = (valid_target_scores.squeeze() * fg_tp_mask.float()).sum() / fg_tp_mask.sum()
-                            classwise_metrics['target_score_fg'][cind] = cls_target_score_fg
-                            cls_target_score_fp = (valid_target_scores.squeeze() * fg_fp_mask.float()).sum() / fg_fp_mask.sum()
+                            cls_target_score_fn = (valid_target_scores * fn_mask.float()).sum() / fn_mask.sum()
+                            classwise_metrics['target_score_fn'][cind] = cls_target_score_fn
+                            cls_target_score_tp = (valid_target_scores * tp_mask.float()).sum() / tp_mask.sum()
+                            classwise_metrics['target_score_tp'][cind] = cls_target_score_tp
+                            cls_target_score_fp = (valid_target_scores * fp_mask.float()).sum() / fp_mask.sum()
                             classwise_metrics['target_score_fp'][cind] = cls_target_score_fp
                         if valid_pred_weights is not None:
-                            cls_pred_weight_fg_mc = (valid_pred_weights.squeeze() * fg_mc_mask.float()).sum() / fg_mc_mask.sum()
-                            classwise_metrics['pred_weight_mc_fg'][cind] = cls_pred_weight_fg_mc
-                            cls_pred_weight_cc_fg = (valid_pred_weights.squeeze() * fg_tp_mask).sum() / fg_tp_mask.float().sum()
-                            classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_cc_fg
-                            cls_pred_weight_cc_fp = (valid_pred_weights.squeeze() * fg_fp_mask).sum() / fg_fp_mask.float().sum()
+                            cls_pred_weight_fg_mc = (valid_pred_weights * fn_mask.float()).sum() / fn_mask.sum()
+                            classwise_metrics['pred_weight_fn'][cind] = cls_pred_weight_fg_mc
+                            cls_pred_weight_cc_tp = (valid_pred_weights * tp_mask).sum() / tp_mask.float().sum()
+                            classwise_metrics['pred_weight_tp'][cind] = cls_pred_weight_cc_tp
+                            cls_pred_weight_cc_fp = (valid_pred_weights * fp_mask).sum() / fp_mask.float().sum()
                             classwise_metrics['pred_weight_fp'][cind] = cls_pred_weight_cc_fp
 
             for key, val in classwise_metrics.items():

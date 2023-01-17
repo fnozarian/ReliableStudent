@@ -195,6 +195,7 @@ class RoIHeadTemplate(nn.Module):
         sample_pls, sample_pl_scores = [], []
         ema_preds_of_std_rois, ema_pred_scores_of_std_rois = [], []
         sample_gts = []
+        sample_gt_iou_of_rois = []
         for i, uind in enumerate(unlabeled_inds):
             mask = (targets_dict['reg_valid_mask'][uind] > 0) if mask_type == 'reg' else (
                         targets_dict['rcnn_cls_labels'][uind] >= 0)
@@ -204,9 +205,10 @@ class RoIHeadTemplate(nn.Module):
             roi_labels = targets_dict['roi_labels'][uind][mask].unsqueeze(-1).detach().clone()
             roi_scores = torch.sigmoid(targets_dict['roi_scores'])[uind][mask].detach().clone()
             roi_labeled_boxes = torch.cat([rois, roi_labels], dim=-1)
+            gt_iou_of_rois = targets_dict['gt_iou_of_rois'][uind][mask].unsqueeze(-1).detach().clone()
             sample_rois.append(roi_labeled_boxes)
             sample_roi_scores.append(roi_scores)
-
+            sample_gt_iou_of_rois.append(gt_iou_of_rois)
             # Target info
             target_labeled_boxes = targets_dict['gt_of_rois_src'][uind][mask].detach().clone()
             target_scores = targets_dict['rcnn_cls_labels'][uind][mask].detach().clone()
@@ -305,7 +307,7 @@ class RoIHeadTemplate(nn.Module):
                              'ground_truths': sample_gts, 'targets': sample_targets,
                              'pseudo_labels': sample_pls, 'pseudo_label_scores': sample_pl_scores,
                              'target_scores': sample_target_scores, 'pred_weights': sample_pred_weights,
-                             'iou_wrt_pl': True}
+                             'pred_iou_wrt_pl': sample_gt_iou_of_rois}
             metrics.update(**metric_inputs)
 
     def assign_targets(self, batch_dict):
