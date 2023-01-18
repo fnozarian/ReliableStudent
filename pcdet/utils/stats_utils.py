@@ -132,7 +132,8 @@ class PredQualityMetrics(Metric):
                     cls_score_uc = (valid_pred_scores * cc_uc_mask.float()).sum() / (cc_uc_mask).sum()
                     classwise_metrics['score_ucs'][cind] = cls_score_uc
 
-                    cls_score_bg = (valid_pred_scores * bg_mask.float()).sum() / torch.clamp(bg_mask.float().sum(), min=1.0)
+                    cls_bg_mask = pred_cls_mask & bg_mask
+                    cls_score_bg = (valid_pred_scores * cls_bg_mask.float()).sum() / torch.clamp(bg_mask.float().sum(), min=1.0)
                     classwise_metrics['score_bgs'][cind] = cls_score_bg
 
                     # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
@@ -141,19 +142,19 @@ class PredQualityMetrics(Metric):
                         valid_roi_scores = torch.sigmoid(valid_roi_scores)
                         cls_sem_score_fg = (valid_roi_scores * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
                         classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
-                        cls_sem_score_bg = (valid_roi_scores * bg_mask.float()).sum() / bg_mask.float().sum()
+                        cls_sem_score_bg = (valid_roi_scores * cls_bg_mask.float()).sum() / cls_bg_mask.float().sum()
                         classwise_metrics['sem_score_bgs'][cind] = cls_sem_score_bg
                         cls_sem_score_uc = (valid_roi_scores * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['sem_score_ucs'][cind] = cls_sem_score_uc
 
                     if valid_target_scores is not None:
-                        cls_target_score_bg = (valid_target_scores * bg_mask.float()).sum() / bg_mask.float().sum()
+                        cls_target_score_bg = (valid_target_scores * cls_bg_mask.float()).sum() / cls_bg_mask.float().sum()
                         classwise_metrics['target_score_bg'][cind] = cls_target_score_bg
                         cls_target_score_uc = (valid_target_scores * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['target_score_uc'][cind] = cls_target_score_uc
 
                     if valid_pred_weights is not None:
-                        cls_pred_weight_bg = (valid_pred_weights * bg_mask.float()).sum() / bg_mask.float().sum()
+                        cls_pred_weight_bg = (valid_pred_weights * cls_bg_mask.float()).sum() / cls_bg_mask.float().sum()
                         classwise_metrics['pred_weight_bg'][cind] = cls_pred_weight_bg
                         cls_pred_weight_uc = (valid_pred_weights * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['pred_weight_uc'][cind] = cls_pred_weight_uc
@@ -174,7 +175,7 @@ class PredQualityMetrics(Metric):
                         # ------ Foreground Mis-classification Metrics ------
                         fn_mask = (cls_bg_mask_wrt_pl | cls_uc_mask_wrt_pl) & cc_fg_mask
                         tp_mask = cls_fg_mask_wrt_pl & cc_fg_mask
-                        fp_mask = cls_fg_mask_wrt_pl & (bg_mask | cc_uc_mask)
+                        fp_mask = cls_fg_mask_wrt_pl & (cls_bg_mask | cc_uc_mask)
                         classwise_metrics['pred_fn_rate'][cind] = fn_mask.sum() / cc_fg_mask.sum()
                         classwise_metrics['pred_tp_rate'][cind] = tp_mask.sum() / cc_fg_mask.sum()
                         classwise_metrics['pred_fp_ratio'][cind] = fp_mask.sum() / cls_fg_mask_wrt_pl.sum()
