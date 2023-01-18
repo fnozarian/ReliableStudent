@@ -156,6 +156,32 @@ def init_dist_slurm(tcp_port, local_rank, backend='nccl'):
     node_list = os.environ['SLURM_NODELIST']
     num_gpus = torch.cuda.device_count()
     try:
+        dist_vars_1 = """ SLURM_NODELIST: %s
+
+                                cuda.device_count: %s
+
+                                SLURM_NTASKS: %s
+                                WORLD_SIZE: %s
+
+                                LOCAL_RANK: %s
+                                RANK remainder cuda.device_count: %s
+
+                                SLURM_PROCID: %s
+                                RANK: %s
+                                \n
+                            """ % (os.environ["SLURM_NODELIST"],
+
+                                   str(torch.cuda.device_count()),
+
+                                   os.environ["SLURM_NTASKS"],
+                                   os.environ["WORLD_SIZE"],
+
+                                   os.environ["LOCAL_RANK"],
+                                   str(int(os.environ["RANK"]) % int(torch.cuda.device_count())),
+
+                                   os.environ["SLURM_PROCID"],
+                                   os.environ["RANK"])
+        print(dist_vars_1)
         torch.cuda.set_device(proc_id % num_gpus)
         # addr = subprocess.getoutput('scontrol show hostname {} | head -n1'.format(node_list))
         # os.environ['MASTER_PORT'] = str(tcp_port)
@@ -167,37 +193,13 @@ def init_dist_slurm(tcp_port, local_rank, backend='nccl'):
         total_gpus = dist.get_world_size()
         return total_gpus, rank
     except:
-        dist_vars = """ SLURM_NODELIST: %s
-                        
-                        cuda.device_count: %s
-                        
-                        SLURM_NTASKS: %s
-                        WORLD_SIZE: %s
-                        dist.get_world_size: %s
-                        
-                        LOCAL_RANK: %s
-                        RANK remainder cuda.device_count: %s
-                        
-                        SLURM_PROCID: %s
-                        RANK: %s
+
+        dist_vars_2 = """
                         dist.get_rank: %s
+                        dist.get_world_size: %s
                         \n
-                        """ % (os.environ["SLURM_NODELIST"],
-
-                               str(torch.cuda.device_count()),
-
-                               os.environ["SLURM_NTASKS"],
-                               os.environ["WORLD_SIZE"],
-                               str(dist.get_world_size()),
-
-                               os.environ["LOCAL_RANK"],
-                               str(int(os.environ["RANK"]) % int(torch.cuda.device_count())),
-
-                               os.environ["SLURM_PROCID"],
-                               os.environ["RANK"],
-                               str(dist.get_rank())
-                               )
-        print(dist_vars)
+                        """ % (str(dist.get_rank()), str(dist.get_world_size()))
+        print(dist_vars_2)
 
 
 def init_dist_pytorch(tcp_port, local_rank, backend='nccl'):
