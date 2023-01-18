@@ -261,7 +261,6 @@ class KITTIEvalMetrics(Metric):
                 current_classes_int.append(curcls)
         self.current_classes = current_classes_int
         self.min_overlaps = self.min_overlaps[:, :, self.current_classes]
-        # if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
         self.add_state("detections", default=[])
         self.add_state("groundtruths", default=[])
         self.add_state("overlaps", default=[])
@@ -269,6 +268,8 @@ class KITTIEvalMetrics(Metric):
     def update(self, preds: [torch.Tensor], pred_scores: [torch.Tensor], ground_truths: [torch.Tensor],
                rois=None, roi_scores=None, targets=None, target_scores=None, pred_weights=None,
                pseudo_labels=None, pseudo_label_scores=None, iou_wrt_pl=False) -> None:
+        if not cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
+            return
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in ground_truths])
         if roi_scores is not None:
             assert len(pred_scores) == len(roi_scores)
@@ -303,7 +304,6 @@ class KITTIEvalMetrics(Metric):
             if num_gts > 0 and num_preds > 0:
                 overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
 
-            # if cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
             self.detections.append(valid_pred_boxes)
             self.groundtruths.append(valid_gt_boxes)
             self.overlaps.append(overlap)
