@@ -7,7 +7,6 @@
 import argparse
 import pickle
 
-from pcdet.datasets.kitti.kitti_object_eval_python import eval as kitti_eval
 from torchmetrics import Metric
 import torch
 import numpy as np
@@ -791,6 +790,8 @@ def get_mAP_R40(prec):
 
 
 def _stats(pred_infos, gt_infos):
+    from pcdet.datasets.kitti.kitti_object_eval_python import eval as kitti_eval
+
     pred_infos = pickle.load(open(pred_infos, 'rb'))
     gt_infos = pickle.load(open(gt_infos, 'rb'))
     gt_annos = [info['annos'] for info in gt_infos]
