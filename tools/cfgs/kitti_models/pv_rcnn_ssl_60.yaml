@@ -207,8 +207,8 @@ MODEL:
 
             REG_FG_THRESH: 0.55
             UNLABELED_REG_FG_THRESH: 0.55
-            UNLABELED_SAMPLER_TYPE: None
-            UNLABELED_SAMPLE_EASY_BG: False
+            UNLABELED_SAMPLER_TYPE: subsample_labeled_rois
+            UNLABELED_SAMPLE_EASY_BG: True
             UNLABELED_SHARP_RCNN_CLS_LABELS: True
             UNLABELED_USE_CALIBRATED_IOUS: True
             UNLABELED_TEACHER_SCORES_FOR_RVM: False
