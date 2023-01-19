@@ -560,9 +560,12 @@ class PVRCNN_SSL(Detector3DTemplate):
             conf_thresh = torch.tensor(self.thresh, device=pseudo_label.device).unsqueeze(
                 0).repeat(len(pseudo_label), 1).gather(dim=1, index=(pseudo_label - 1).unsqueeze(-1))
 
+            sem_conf_thresh = torch.tensor(self.sem_thresh, device=pseudo_label.device).unsqueeze(
+                0).repeat(len(pseudo_label), 1).gather(dim=1, index=(pseudo_label - 1).unsqueeze(-1))
+
             valid_inds = pseudo_score > conf_thresh.squeeze()
 
-            valid_inds = valid_inds * (pseudo_sem_score > self.sem_thresh[0])
+            valid_inds = valid_inds & (pseudo_sem_score > sem_conf_thresh.squeeze())
 
             # TODO(farzad) can this be similarly determined by tag-based stats before and after filtering?
             # rej_labels = pseudo_label[~valid_inds]
