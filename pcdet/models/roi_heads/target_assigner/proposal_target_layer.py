@@ -71,8 +71,8 @@ class ProposalTargetLayer(nn.Module):
 
             if index in batch_dict['unlabeled_inds']:
                 subsample_unlabeled_rois = getattr(self, self.roi_sampler_cfg.UNLABELED_SAMPLER_TYPE, None)
-                if subsample_unlabeled_rois is None:
-                    sampled_inds, cur_reg_valid_mask, cur_cls_labels, roi_ious, gt_assignment, cur_interval_mask = self.subsample_unlabeled_rois_default(batch_dict, index)
+                if self.roi_sampler_cfg.UNLABELED_SAMPLER_TYPE is None:
+                    sampled_inds, cur_reg_valid_mask, cur_cls_labels, roi_ious, gt_assignment, cur_interval_mask = self.subsample_labeled_rois(batch_dict, index)
                 else:
                     sampled_inds, cur_reg_valid_mask, cur_cls_labels, roi_ious, gt_assignment, cur_interval_mask = subsample_unlabeled_rois(batch_dict, index)
                 cur_roi = batch_dict['rois'][index][sampled_inds]
