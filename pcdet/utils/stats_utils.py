@@ -138,7 +138,6 @@ class PredQualityMetrics(Metric):
                     # Using clamp with min=1 in the denominator makes the final results zero when there's no FG,
                     # while without clamp it is N/A, which makes more sense.
                     if valid_roi_scores is not None:
-                        valid_roi_scores = torch.sigmoid(valid_roi_scores)
                         cls_sem_score_fg = (valid_roi_scores * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
                         classwise_metrics['sem_score_fgs'][cind] = cls_sem_score_fg
                         cls_sem_score_bg = (valid_roi_scores * cls_bg_mask.float()).sum() / cls_bg_mask.float().sum()
