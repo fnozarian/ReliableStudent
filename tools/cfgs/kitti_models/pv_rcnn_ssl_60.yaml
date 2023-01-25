@@ -164,6 +164,7 @@ MODEL:
         ENABLE_RCNN_CONSISTENCY: False
         ENABLE_SOFT_TEACHER: False
         ENABLE_EVAL: True
+        METRICS_PRED_TYPES: [roi_pl_gt, pl_gt_metrics_before_filtering]
         SHARED_FC: [256, 256]
         CLS_FC: [256, 256]
         REG_FC: [256, 256]

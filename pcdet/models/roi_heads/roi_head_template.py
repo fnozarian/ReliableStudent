@@ -587,7 +587,9 @@ class RoIHeadTemplate(nn.Module):
 
         if self.model_cfg.get("ENABLE_EVAL", None):
             # self.update_metrics(self.forward_ret_dict, mask_type='reg')
-            self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type=['roi_pl_gt'], vis_type='roi_pl')
+            metrics_pred_types = self.model_cfg.get("METRICS_PRED_TYPES", None)
+            if metrics_pred_types is not None:
+                self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type=metrics_pred_types, vis_type='roi_pl')
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)
