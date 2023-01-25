@@ -517,14 +517,6 @@ class RoIHeadTemplate(nn.Module):
             if self.model_cfg.TARGET_CONFIG.get("UNLABELED_SAMPLER_TYPE", None) != 'subsample_labeled_rois':
                 gt_iou_of_rois = self.forward_ret_dict['gt_iou_of_rois'][unlabeled_inds].detach().clone()
                 roi_labels = self.forward_ret_dict['roi_labels'][unlabeled_inds].detach().clone() - 1
-                
-                # ----------- REG_VALID_MASK -----------
-                reg_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_REG_FG_THRESH
-                if self.model_cfg.TARGET_CONFIG.get("UNLABELED_TEACHER_SCORES_FOR_RVM", False):
-                    filtering_mask = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds] > reg_fg_thresh
-                else:
-                    filtering_mask = gt_iou_of_rois > reg_fg_thresh
-                self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] = filtering_mask.long()
 
                 # ----------- RCNN_CLS_LABELS -----------
                 ulb_cls_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_CLS_FG_THRESH
@@ -546,7 +538,18 @@ class RoIHeadTemplate(nn.Module):
                 if self.model_cfg.TARGET_CONFIG.get("UNLABELED_USE_CALIBRATED_IOUS", False):
                     gt_iou_of_rois[ulb_interval_mask]  = (gt_iou_of_rois[ulb_interval_mask] - cls_bg_thresh) \
                                                         / (cls_fg_thresh[ulb_interval_mask] - cls_bg_thresh)
-                
+
+                # ----------- REG_VALID_MASK -----------
+                ulb_reg_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_REG_FG_THRESH
+                ulb_reg_fg_thresh = gt_iou_of_rois.new_tensor(ulb_reg_fg_thresh).reshape(1, 1, -1).repeat(*gt_iou_of_rois.shape[:2], 1)
+                ulb_reg_fg_thresh = torch.gather(ulb_reg_fg_thresh, dim=-1, index=roi_labels.unsqueeze(-1)).squeeze(-1)
+                if self.model_cfg.TARGET_CONFIG.get("UNLABELED_TEACHER_SCORES_FOR_RVM", False):
+                    # TODO Ensure this works with new classwise thresholds
+                    filtering_mask = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds] > ulb_reg_fg_thresh
+                else:
+                    filtering_mask = gt_iou_of_rois > ulb_reg_fg_thresh
+                self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] = filtering_mask.long()
+
                 self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] = gt_iou_of_rois
                 self.forward_ret_dict['interval_mask'][unlabeled_inds] = ulb_interval_mask
 
