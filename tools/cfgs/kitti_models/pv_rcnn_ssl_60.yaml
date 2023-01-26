@@ -164,6 +164,7 @@ MODEL:
         ENABLE_RCNN_CONSISTENCY: False
         ENABLE_SOFT_TEACHER: False
         ENABLE_EVAL: True
+        METRICS_PRED_TYPES: [roi_pl_gt, pl_gt_metrics_before_filtering]
         SHARED_FC: [256, 256]
         CLS_FC: [256, 256]
         REG_FC: [256, 256]
@@ -206,7 +207,7 @@ MODEL:
             HARD_BG_RATIO: 0.8
 
             REG_FG_THRESH: 0.55
-            UNLABELED_REG_FG_THRESH: 0.55
+            UNLABELED_REG_FG_THRESH: [0.65, 0.45, 0.4]
             UNLABELED_SAMPLER_TYPE: subsample_labeled_rois
             UNLABELED_SAMPLE_EASY_BG: True
             UNLABELED_SHARP_RCNN_CLS_LABELS: True
