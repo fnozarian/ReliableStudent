@@ -228,9 +228,9 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             # Used for calc stats before and after filtering
             ori_unlabeled_boxes = batch_dict['gt_boxes'][unlabeled_inds, ...]
-
-            # PL metrics before filtering
-            self.update_metrics(batch_dict, pred_dicts_ens, unlabeled_inds, labeled_inds)
+            if self.model_cfg.ROI_HEAD.get("ENABLE_EVAL", False):
+                # PL metrics before filtering
+                self.update_metrics(batch_dict, pred_dicts_ens, unlabeled_inds, labeled_inds)
 
             pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
                 self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
