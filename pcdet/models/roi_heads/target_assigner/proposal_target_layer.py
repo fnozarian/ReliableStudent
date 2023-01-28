@@ -168,7 +168,7 @@ class ProposalTargetLayer(nn.Module):
         iou_bg_thresh = self.roi_sampler_cfg.CLS_BG_THRESH
         # NOTE (shashank): Use classwise local thresholds used in unlabeled ROIs for labeled ROIs  
         if self.roi_sampler_cfg.USE_ULB_CLS_FG_THRESH_FOR_LB :
-            iou_fg_thresh = self.roi_sampler_cfg.UNLABELED_REG_FG_THRESH
+            iou_fg_thresh = self.roi_sampler_cfg.UNLABELED_CLS_FG_THRESH
             iou_fg_thresh = roi_ious.new_tensor(iou_fg_thresh).unsqueeze(0).repeat(len(roi_ious), 1)
             iou_fg_thresh = torch.gather(iou_fg_thresh, dim=-1, index=(cur_roi_labels[sampled_inds]-1).unsqueeze(-1)).squeeze(-1)
         else:
