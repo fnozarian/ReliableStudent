@@ -213,6 +213,7 @@ MODEL:
             UNLABELED_SHARP_RCNN_CLS_LABELS: True
             UNLABELED_USE_CALIBRATED_IOUS: True
             UNLABELED_TEACHER_SCORES_FOR_RVM: False
+            USE_ULB_CLS_FG_THRESH_FOR_LB: False
 
         LOSS_CONFIG:
             UL_RCNN_CLS_WEIGHT_TYPE: 'interval-only' # two options: `all` or `interval-only`
