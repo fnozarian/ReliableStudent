@@ -148,7 +148,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.supervise_mode = model_cfg.SUPERVISE_MODE
         cls_bg_thresh = model_cfg.ROI_HEAD.TARGET_CONFIG.CLS_BG_THRESH
         self.metric_registry = MetricRegistry(dataset=self.dataset, model_cfg=model_cfg)
-        vals_to_store = ['iou_roi_pl', 'iou_roi_gt', 'pred_scores', 'class_labels', 'iteration']
+        vals_to_store = ['iou_roi_pl', 'iou_roi_gt', 'pred_scores', 'weights', 'class_labels', 'iteration']
         self.val_dict = {val: [] for val in vals_to_store}
 
     def forward(self, batch_dict):
@@ -428,8 +428,11 @@ class PVRCNN_SSL(Detector3DTemplate):
                     cur_pred_score = batch_dict['batch_cls_preds'][cur_unlabeled_ind].squeeze()
                     self.val_dict['pred_scores'].extend(cur_pred_score.tolist())
 
-                    cur_pred_score = batch_dict['roi_labels'][cur_unlabeled_ind].squeeze()
-                    self.val_dict['class_labels'].extend(cur_pred_score.tolist())
+                    cur_weight = self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_weights'][cur_unlabeled_ind]
+                    self.val_dict['weights'].extend(cur_weight.tolist())
+
+                    cur_roi_label = batch_dict['roi_labels'][cur_unlabeled_ind].squeeze()
+                    self.val_dict['class_labels'].extend(cur_roi_label.tolist())
 
                     cur_iteration = torch.ones_like(preds_iou_max) * (batch_dict['cur_iteration'])
                     self.val_dict['iteration'].extend(cur_iteration.tolist())
