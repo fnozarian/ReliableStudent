@@ -578,6 +578,9 @@ class RoIHeadTemplate(nn.Module):
                 ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
                 unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
                 unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
+            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-rev_uc-bg':
+                unlabeled_rcnn_cls_weights[~ulb_bg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][~ulb_bg_mask]
+                unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
             else:
                 raise ValueError
 
