@@ -214,6 +214,7 @@ MODEL:
             UNLABELED_USE_CALIBRATED_IOUS: True
             UNLABELED_TEACHER_SCORES_FOR_RVM: False
             USE_ULB_CLS_FG_THRESH_FOR_LB: False
+            DISABLE_ST_WEIGHTS: False
 
         LOSS_CONFIG:
             UL_RCNN_CLS_WEIGHT_TYPE: 'interval-only' # two options: `all` or `interval-only`
@@ -264,6 +265,7 @@ MODEL:
     NO_NMS: False
     EMA_ALPHA: 0.999
     EMA_UPDATE_INTERVAL: 1 
+    STORE_SCORES_IN_PKL: False
 
 
 OPTIMIZATION:

@@ -1,6 +1,6 @@
 import copy
 import os
-
+import pickle
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -148,6 +148,8 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.supervise_mode = model_cfg.SUPERVISE_MODE
         cls_bg_thresh = model_cfg.ROI_HEAD.TARGET_CONFIG.CLS_BG_THRESH
         self.metric_registry = MetricRegistry(dataset=self.dataset, model_cfg=model_cfg)
+        vals_to_store = ['iou_roi_pl', 'iou_roi_gt', 'pred_scores', 'weights', 'class_labels', 'iteration']
+        self.val_dict = {val: [] for val in vals_to_store}
 
     def forward(self, batch_dict):
         if self.training:
@@ -385,6 +387,58 @@ class PVRCNN_SSL(Detector3DTemplate):
                     tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
                 else:
                     tb_dict_[key] = tb_dict[key]
+
+            if self.model_cfg.get('STORE_SCORES_IN_PKL', False) :
+                # Store different types of scores over all itrs and epochs and dump them in a pickle for offline modeling 
+                # TODO (shashank) : Can be optimized later to save computational time, currently takes about 0.002sec
+                batch_roi_labels = self.pv_rcnn.roi_head.forward_ret_dict['roi_labels'][unlabeled_inds]
+                batch_roi_labels = [roi_labels.clone().detach() for roi_labels in batch_roi_labels]
+
+                batch_rois = self.pv_rcnn.roi_head.forward_ret_dict['rois'][unlabeled_inds]
+                batch_rois = [rois.clone().detach() for rois in batch_rois]
+
+                batch_ori_gt_boxes = self.pv_rcnn.roi_head.forward_ret_dict['ori_unlabeled_boxes']
+                batch_ori_gt_boxes = [ori_gt_boxes.clone().detach() for ori_gt_boxes in batch_ori_gt_boxes]
+
+                for i in range(len(batch_rois)):
+                    valid_rois_mask = torch.logical_not(torch.all(batch_rois[i] == 0, dim=-1))
+                    valid_rois = batch_rois[i][valid_rois_mask]
+                    valid_roi_labels = batch_roi_labels[i][valid_rois_mask]
+                    valid_roi_labels -= 1                                   # Starting class indices from zero
+
+                    valid_gt_boxes_mask = torch.logical_not(torch.all(batch_ori_gt_boxes[i] == 0, dim=-1))
+                    valid_gt_boxes = batch_ori_gt_boxes[i][valid_gt_boxes_mask]
+                    valid_gt_boxes[:, -1] -= 1                              # Starting class indices from zero
+
+                    num_gts = valid_gt_boxes_mask.sum()
+                    num_preds = valid_rois_mask.sum()
+
+                    cur_unlabeled_ind = unlabeled_inds[i]
+                    if num_gts > 0 and num_preds > 0:
+                        # Find IoU between Student's ROI v/s Original GTs
+                        overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_rois[:, 0:7], valid_gt_boxes[:, 0:7])
+                        preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
+                        self.val_dict['iou_roi_gt'].extend(preds_iou_max.tolist())
+
+                        cur_iou_roi_pl = self.pv_rcnn.roi_head.forward_ret_dict['gt_iou_of_rois'][cur_unlabeled_ind]
+                        self.val_dict['iou_roi_pl'].extend(cur_iou_roi_pl.tolist())
+
+                        cur_pred_score = torch.sigmoid(batch_dict['batch_cls_preds'][cur_unlabeled_ind]).squeeze()
+                        self.val_dict['pred_scores'].extend(cur_pred_score.tolist())
+
+                        cur_weight = self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_weights'][cur_unlabeled_ind]
+                        self.val_dict['weights'].extend(cur_weight.tolist())
+
+                        cur_roi_label = batch_dict['roi_labels'][cur_unlabeled_ind].squeeze()
+                        self.val_dict['class_labels'].extend(cur_roi_label.tolist())
+
+                        cur_iteration = torch.ones_like(preds_iou_max) * (batch_dict['cur_iteration'])
+                        self.val_dict['iteration'].extend(cur_iteration.tolist())
+
+                # replace old pickle data (if exists) with updated one 
+                output_dir = os.path.split(os.path.abspath(batch_dict['ckpt_save_dir']))[0]
+                file_path = os.path.join(output_dir, 'scores.pkl')
+                pickle.dump(self.val_dict, open(file_path, 'wb'))
 
             for key in self.metric_registry.tags():
                 metrics = self.compute_metrics(tag=key)
