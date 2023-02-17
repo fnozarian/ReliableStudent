@@ -347,6 +347,33 @@ class RoIHeadTemplate(nn.Module):
         targets_dict['gt_of_rois'] = gt_of_rois
         return targets_dict
 
+    def get_ulb_cls_dist_loss(self, forward_ret_dict):
+        loss_cfgs = self.model_cfg.LOSS_CONFIG
+
+        # TODO(farzad) get lbl_cls_dist from dataset
+        # Car: 0.8192846565668072, Ped - 0.12985533659870144, Cyc - 0.0508600068344914
+        lbl_cls_dist = torch.tensor([0.8192846565668072, 0.12985533659870144, 0.0508600068344914],
+                                    device=forward_ret_dict['roi_labels'].device)
+
+        ulb_inds = forward_ret_dict['unlabeled_inds']
+        ulb_cls_labels = forward_ret_dict['roi_labels'][ulb_inds]
+        ulb_num_cls = torch.bincount(ulb_cls_labels.view(-1), minlength=4)[1:].float()
+        ulb_cls_dist = ulb_num_cls / ulb_num_cls.sum()
+
+        # calculate kl divergence between lbl_cls_dist and cls_dist_batch
+        ulb_cls_dist = ulb_cls_dist + 1e-6
+        lbl_cls_dist = lbl_cls_dist + 1e-6
+        ulb_cls_dist_loss = torch.sum(lbl_cls_dist * torch.log(lbl_cls_dist / ulb_cls_dist))
+        # clamp ulb_cls_dist_loss
+        ulb_cls_dist_loss = torch.clamp(ulb_cls_dist_loss, min=0.0, max=2.0)
+        ulb_cls_dist_loss = ulb_cls_dist_loss * loss_cfgs.LOSS_WEIGHTS['ulb_cls_dist_weight']
+
+        tb_dict = {
+            # For consistency with other losses
+            'ulb_cls_dist_loss': ulb_cls_dist_loss.unsqueeze(0).repeat(forward_ret_dict['roi_labels'].shape[0], 1)
+        }
+        return ulb_cls_dist_loss, tb_dict
+
     def get_box_reg_layer_loss(self, forward_ret_dict, scalar=True):
         loss_cfgs = self.model_cfg.LOSS_CONFIG
         code_size = self.box_coder.code_size
@@ -625,15 +652,17 @@ class RoIHeadTemplate(nn.Module):
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)
-        rcnn_loss = rcnn_loss_cls + rcnn_loss_reg
+        ulb_loss_cls_dist, cls_dist_dict = self.get_ulb_cls_dist_loss(self.forward_ret_dict)
+        rcnn_loss = rcnn_loss_cls + rcnn_loss_reg + ulb_loss_cls_dist
 
         tb_dict.update(cls_tb_dict)
         tb_dict.update(reg_tb_dict)
+        tb_dict.update(cls_dist_dict)
         tb_dict['rcnn_loss'] = rcnn_loss.item() if scalar else rcnn_loss
         if scalar:
             return rcnn_loss, tb_dict
         else:
-            return rcnn_loss_cls, rcnn_loss_reg, tb_dict
+            return rcnn_loss_cls, rcnn_loss_reg, ulb_loss_cls_dist, tb_dict
 
     def generate_predicted_boxes(self, batch_size, rois, cls_preds, box_preds):
         """
