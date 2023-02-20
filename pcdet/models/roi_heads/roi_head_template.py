@@ -588,6 +588,15 @@ class RoIHeadTemplate(nn.Module):
                 unlabeled_rcnn_cls_weights = self.forward_ret_dict['rcnn_cls_weights'][unlabeled_inds]
                 ul_interval_mask = self.forward_ret_dict['interval_mask'][unlabeled_inds]
                 
+                # Use teacher's scores for unlabeled samples in the interval-mask (UCs)   
+                if self.model_cfg.TARGET_CONFIG.get("UNLABELED_INTERVAL_WITH_TEACHER_SCORES", False):
+                    for inds in unlabeled_inds:
+                        interval_mask = self.forward_ret_dict['interval_mask'][inds]
+                        self.forward_ret_dict['rcnn_cls_labels'][inds][interval_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][inds][interval_mask]
+                    # NOTE : Do not use any weights for UCs, as their targets are already coming from the teacher 
+                    if self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] not in ['bg', 'fg', 'fg-bg']:
+                        self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] = 'bg'
+
                 if self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'all':
                     unlabeled_rcnn_cls_weights[ul_interval_mask] = rcnn_bg_score_teacher[unlabeled_inds][ul_interval_mask]
                 # Use Teacher's FG scores instead of BG scores for UCs (its the reverse of "all") 
