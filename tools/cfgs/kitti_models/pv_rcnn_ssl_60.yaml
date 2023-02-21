@@ -268,7 +268,7 @@ MODEL:
     NO_NMS: False
     EMA_ALPHA: 0.999
     EMA_UPDATE_INTERVAL: 1 
-    USE_SUM_OVER_LOSS: False
+    REDUCE_LOSS: 'sum'
     STORE_SCORES_IN_PKL: False
 
 

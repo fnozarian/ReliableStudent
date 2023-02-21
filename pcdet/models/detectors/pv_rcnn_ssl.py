@@ -357,71 +357,40 @@ class PVRCNN_SSL(Detector3DTemplate):
             loss_point, tb_dict = self.pv_rcnn.point_head.get_loss(tb_dict, scalar=False)
             loss_rcnn_cls, loss_rcnn_box, ulb_loss_cls_dist, tb_dict = self.pv_rcnn.roi_head.get_loss(tb_dict, scalar=False)
 
-            if self.model_cfg.USE_SUM_OVER_LOSS:
-                if not self.unlabeled_supervise_cls:
-                    loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].sum()
-                else:
-                    loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].sum() + loss_rpn_cls[unlabeled_inds, ...].sum() * self.unlabeled_weight
-
-                loss_rpn_box = loss_rpn_box[labeled_inds, ...].sum() + loss_rpn_box[unlabeled_inds, ...].sum() * self.unlabeled_weight
-                loss_point = loss_point[labeled_inds, ...].sum()
-                if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False):
-                    loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].sum() + loss_rcnn_cls[unlabeled_inds, ...].sum() * self.unlabeled_weight
-                else:
-                    loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].sum()
-                if not self.unlabeled_supervise_refine:
-                    loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].sum()
-                else:
-                    loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].sum() + loss_rcnn_box[unlabeled_inds, ...].sum() * self.unlabeled_weight
-
-                loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box
-                tb_dict_ = {}
-                for key in tb_dict.keys():
-                    if 'loss' in key:
-                        tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].sum()
-                        tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].sum()
-                    elif 'acc' in key:
-                        tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].sum()
-                        tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].sum()
-                    elif 'point_pos_num' in key:
-                        tb_dict_[key + "_labeled"] = tb_dict[key][labeled_inds, ...].sum()
-                        tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].sum()
-                    else:
-                        tb_dict_[key] = tb_dict[key]
-            
+            # Use the same reduction method as the baseline model (3diou) by the default
+            reduce_loss = getattr(torch, self.model_cfg.REDUCE_LOSS, 'sum')
+            if not self.unlabeled_supervise_cls:
+                    loss_rpn_cls = reduce_loss(loss_rpn_cls[labeled_inds, ...])
             else:
-                if not self.unlabeled_supervise_cls:
-                    loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].mean()
-                else:
-                    loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].mean() + loss_rpn_cls[unlabeled_inds, ...].mean() * self.unlabeled_weight
+                loss_rpn_cls = reduce_loss(loss_rpn_cls[labeled_inds, ...]) + reduce_loss(loss_rpn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
 
-                loss_rpn_box = loss_rpn_box[labeled_inds, ...].mean() + loss_rpn_box[unlabeled_inds, ...].mean() * self.unlabeled_weight
-                loss_point = loss_point[labeled_inds, ...].mean()
-                if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False):
-                    loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean() + loss_rcnn_cls[unlabeled_inds, ...].mean() * self.unlabeled_weight
-                else:
-                    loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean()
-                if not self.unlabeled_supervise_refine:
-                    loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].mean()
-                else:
-                    loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].mean() + loss_rcnn_box[unlabeled_inds, ...].mean() * self.unlabeled_weight
-                if self.model_cfg['ROI_HEAD'].get('ENABLE_ULB_CLS_DIST_LOSS', False):
+            loss_rpn_box = reduce_loss(loss_rpn_box[labeled_inds, ...]) + reduce_loss(loss_rpn_box[unlabeled_inds, ...]) * self.unlabeled_weight
+            loss_point = reduce_loss(loss_point[labeled_inds, ...])
+            if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False):
+                loss_rcnn_cls = reduce_loss(loss_rcnn_cls[labeled_inds, ...]) + reduce_loss(loss_rcnn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
+            else:
+                loss_rcnn_cls = reduce_loss(loss_rcnn_cls[labeled_inds, ...])
+            if not self.unlabeled_supervise_refine:
+                loss_rcnn_box = reduce_loss(loss_rcnn_box[labeled_inds, ...])
+            else:
+                loss_rcnn_box = reduce_loss(loss_rcnn_box[labeled_inds, ...]) + reduce_loss(loss_rcnn_box[unlabeled_inds, ...]) * self.unlabeled_weight
+            if self.model_cfg['ROI_HEAD'].get('ENABLE_ULB_CLS_DIST_LOSS', False):
                     loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box + ulb_loss_cls_dist
+            else:
+                loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box
+            tb_dict_ = {}
+            for key in tb_dict.keys():
+                if 'loss' in key:
+                    tb_dict_[key+"_labeled"] = reduce_loss(tb_dict[key][labeled_inds, ...])
+                    tb_dict_[key + "_unlabeled"] = reduce_loss(tb_dict[key][unlabeled_inds, ...])
+                elif 'acc' in key:
+                    tb_dict_[key+"_labeled"] = reduce_loss(tb_dict[key][labeled_inds, ...])
+                    tb_dict_[key + "_unlabeled"] = reduce_loss(tb_dict[key][unlabeled_inds, ...])
+                elif 'point_pos_num' in key:
+                    tb_dict_[key + "_labeled"] = reduce_loss(tb_dict[key][labeled_inds, ...])
+                    tb_dict_[key + "_unlabeled"] = reduce_loss(tb_dict[key][unlabeled_inds, ...])
                 else:
-                    loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box
-                tb_dict_ = {}
-                for key in tb_dict.keys():
-                    if 'loss' in key:
-                        tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].mean()
-                        tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
-                    elif 'acc' in key:
-                        tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].mean()
-                        tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
-                    elif 'point_pos_num' in key:
-                        tb_dict_[key + "_labeled"] = tb_dict[key][labeled_inds, ...].mean()
-                        tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
-                    else:
-                        tb_dict_[key] = tb_dict[key]
+                    tb_dict_[key] = tb_dict[key]
 
             if self.model_cfg.get('STORE_SCORES_IN_PKL', False) :
                 # Store different types of scores over all itrs and epochs and dump them in a pickle for offline modeling 
