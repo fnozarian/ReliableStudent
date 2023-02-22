@@ -9,6 +9,7 @@ from ...utils import box_coder_utils, common_utils, loss_utils
 from ..model_utils.model_nms_utils import class_agnostic_nms
 from .target_assigner.proposal_target_layer import ProposalTargetLayer
 from .target_assigner.proposal_target_layer_consistency import ProposalTargetLayerConsistency
+from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 
 from visual_utils import visualize_utils as V
 
@@ -319,6 +320,12 @@ class RoIHeadTemplate(nn.Module):
 
         # Adding points temporarily to the targets_dict for visualization inside update_metrics
         targets_dict['points'] = batch_dict['points']
+
+                # Extract number of points in ROIs
+        num_point_in_rois = roiaware_pool3d_utils.points_in_boxes_cpu(targets_dict['points'][:, 1:4].cpu(),
+                                                                    targets_dict['rois'].view(-1,7).cpu()).squeeze(0).sum(1)
+        targets_dict['num_points_in_roi'] = num_point_in_rois.reshape(targets_dict['rois'].shape[0], \
+                                                                    targets_dict['rois'].shape[1])
 
         rois = targets_dict['rois']  # (B, N, 7 + C)
         gt_of_rois = targets_dict['gt_of_rois']  # (B, N, 7 + C + 1)

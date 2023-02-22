@@ -58,6 +58,7 @@ class ProposalTargetLayer(nn.Module):
         batch_reg_valid_mask = rois.new_zeros((batch_size, self.roi_sampler_cfg.ROI_PER_IMAGE), dtype=torch.long)
         batch_cls_labels = -rois.new_ones(batch_size, self.roi_sampler_cfg.ROI_PER_IMAGE)
         interval_mask = rois.new_zeros(batch_size, self.roi_sampler_cfg.ROI_PER_IMAGE, dtype=torch.bool)
+        batch_pcv_scores = rois.new_ones((batch_size, self.roi_sampler_cfg.ROI_PER_IMAGE))
 
         for index in range(batch_size):
             # TODO(farzad) WARNING!!! The index for cur_gt_boxes was missing and caused an error. FIX this in other branches.
@@ -81,6 +82,16 @@ class ProposalTargetLayer(nn.Module):
                 batch_roi_ious[index] = roi_ious
                 # batch_gt_scores[index] = batch_dict['pred_scores_ema'][index][sampled_inds]
                 batch_gt_of_rois[index] = cur_gt_boxes[gt_assignment[sampled_inds]]
+
+                # TODO (shashank): add a flag for this PseCo based Positive Proposal Consistency Voting (PCV)
+                #  based on mean IoUs between all ROIs for each PL
+                cur_reg_loss_weights = torch.zeros(cur_roi.shape[0])
+                gt_inds_set = torch.unique(gt_assignment[sampled_inds])
+                for gt_index in gt_inds_set:
+                    idx_per_gt = (gt_assignment[sampled_inds] == gt_index).nonzero().reshape(-1)
+                    if idx_per_gt.shape[0] > 0:
+                        cur_reg_loss_weights[idx_per_gt] = batch_roi_ious[index][idx_per_gt].mean()
+                batch_pcv_scores[index] = cur_reg_loss_weights
             else:
                 sampled_inds, cur_reg_valid_mask, cur_cls_labels, roi_ious, gt_assignment, cur_interval_mask = self.subsample_labeled_rois(batch_dict, index)
                 cur_roi = batch_dict['rois'][index][sampled_inds]
@@ -100,7 +111,8 @@ class ProposalTargetLayer(nn.Module):
                         'roi_scores': batch_roi_scores, 'roi_labels': batch_roi_labels,
                         'reg_valid_mask': batch_reg_valid_mask,
                         'rcnn_cls_labels': batch_cls_labels,
-                        'interval_mask': interval_mask}
+                        'interval_mask': interval_mask,
+                        'pcv_scores': batch_pcv_scores}
 
         return targets_dict
 
