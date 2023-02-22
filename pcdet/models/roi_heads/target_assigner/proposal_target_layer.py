@@ -90,7 +90,7 @@ class ProposalTargetLayer(nn.Module):
                 for gt_index in gt_inds_set:
                     idx_per_gt = (gt_assignment[sampled_inds] == gt_index).nonzero().reshape(-1)
                     if idx_per_gt.shape[0] > 0:
-                        cur_reg_loss_weights[idx_per_gt] = batch_roi_ious[index][idx_per_gt].mean()
+                        cur_reg_loss_weights[idx_per_gt] = batch_roi_ious[index][idx_per_gt].mean().item()
                 batch_pcv_scores[index] = cur_reg_loss_weights
             else:
                 sampled_inds, cur_reg_valid_mask, cur_cls_labels, roi_ious, gt_assignment, cur_interval_mask = self.subsample_labeled_rois(batch_dict, index)
