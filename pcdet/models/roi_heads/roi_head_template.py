@@ -622,6 +622,8 @@ class RoIHeadTemplate(nn.Module):
                 
                 elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'ignore_interval':  # Naive baseline
                     unlabeled_rcnn_cls_weights[ul_interval_mask] = 0
+                elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'ignore-bg':  # Naive baseline
+                    unlabeled_rcnn_cls_weights[ulb_bg_mask] = 0
                 elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'full-ema':
                     unlabeled_rcnn_cls_weights = rcnn_bg_score_teacher[unlabeled_inds]
                 
