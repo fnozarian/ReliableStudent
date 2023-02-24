@@ -185,8 +185,10 @@ class ProposalTargetLayer(nn.Module):
         bg_mask = roi_ious < iou_bg_thresh
         interval_mask = (fg_mask == 0) & (bg_mask == 0)
         cls_labels = (fg_mask > 0).float()
-        iou_fg_thresh = iou_fg_thresh[interval_mask] if self.roi_sampler_cfg.USE_ULB_CLS_FG_THRESH_FOR_LB else iou_fg_thresh
-        cls_labels[interval_mask] = (roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
+        cls_labels[interval_mask] = (roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh[interval_mask] - iou_bg_thresh)
+
+        ignore_mask = torch.eq(cur_gt_boxes[gt_assignment[sampled_inds]], 0).all(dim=-1)
+        cls_labels[ignore_mask] = -1
 
         return sampled_inds, reg_valid_mask, cls_labels, roi_ious, gt_assignment, interval_mask
 
