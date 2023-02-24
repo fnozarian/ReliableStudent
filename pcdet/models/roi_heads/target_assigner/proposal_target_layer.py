@@ -197,8 +197,10 @@ class ProposalTargetLayer(nn.Module):
         bg_mask = roi_ious < iou_bg_thresh
         interval_mask = (fg_mask == 0) & (bg_mask == 0)
         cls_labels = (fg_mask > 0).float()
-        iou_fg_thresh = iou_fg_thresh[interval_mask] if self.roi_sampler_cfg.USE_ULB_CLS_FG_THRESH_FOR_LB else iou_fg_thresh
-        cls_labels[interval_mask] = (roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
+        cls_labels[interval_mask] = (roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh[interval_mask] - iou_bg_thresh)
+
+        ignore_mask = torch.eq(cur_gt_boxes[gt_assignment[sampled_inds]], 0).all(dim=-1)
+        cls_labels[ignore_mask] = -1
 
         return sampled_inds, reg_valid_mask, cls_labels, roi_ious, gt_assignment, interval_mask
 
@@ -257,7 +259,7 @@ class ProposalTargetLayer(nn.Module):
 
         fg_inds = ((max_overlaps >= fg_thresh)).nonzero().view(-1)  # > 0.55
         easy_bg_inds = ((max_overlaps < self.roi_sampler_cfg.CLS_BG_THRESH_LO)).nonzero().view(-1)  # < 0.1
-        hard_bg_inds = ((max_overlaps < reg_fg_thresh) &
+        hard_bg_inds = ((max_overlaps < fg_thresh) &
                 (max_overlaps >= self.roi_sampler_cfg.CLS_BG_THRESH_LO)).nonzero().view(-1)
 
         fg_num_rois = fg_inds.numel()
