@@ -155,6 +155,53 @@ class ProposalTargetLayer(nn.Module):
 
         return sampled_inds, cur_reg_valid_mask, cur_cls_labels, roi_ious, gt_assignment, interval_mask
 
+    def subsample_unlabeled_rois_classwise(self, batch_dict, index):
+        cur_roi = batch_dict['rois'][index]
+        cur_gt_boxes = batch_dict['gt_boxes'][index]
+        cur_roi_labels = batch_dict['roi_labels'][index]
+
+        reg_fg_thresh = cur_roi.new_tensor(self.roi_sampler_cfg.UNLABELED_REG_FG_THRESH).view(1, -1).repeat(len(cur_roi), 1)
+        reg_fg_thresh = reg_fg_thresh.gather(dim=-1, index=(cur_roi_labels - 1).unsqueeze(-1)).squeeze(-1)
+
+        cls_fg_thresh = cur_roi.new_tensor(self.roi_sampler_cfg.UNLABELED_CLS_FG_THRESH).view(1, -1).repeat(len(cur_roi), 1)
+        cls_fg_thresh = cls_fg_thresh.gather(dim=-1, index=(cur_roi_labels - 1).unsqueeze(-1)).squeeze(-1)
+
+        if self.roi_sampler_cfg.get('SAMPLE_ROI_BY_EACH_CLASS', False):
+            max_overlaps, gt_assignment = self.get_max_iou_with_same_class(
+                rois=cur_roi, roi_labels=cur_roi_labels,
+                gt_boxes=cur_gt_boxes[:, 0:7], gt_labels=cur_gt_boxes[:, -1].long()
+            )
+        else:
+            iou3d = iou3d_nms_utils.boxes_iou3d_gpu(cur_roi, cur_gt_boxes[:, 0:7])  # (M, N)
+            max_overlaps, gt_assignment = torch.max(iou3d, dim=1)
+
+        sampled_inds = self.subsample_rois(max_overlaps=max_overlaps,
+                                           reg_fg_thresh=reg_fg_thresh,
+                                           cls_fg_thresh=cls_fg_thresh)
+        roi_ious = max_overlaps[sampled_inds]
+
+        if isinstance(reg_fg_thresh, torch.Tensor):
+            reg_fg_thresh = reg_fg_thresh[sampled_inds]
+        if isinstance(cls_fg_thresh, torch.Tensor):
+            cls_fg_thresh = cls_fg_thresh[sampled_inds]
+
+        # regression valid mask
+        reg_valid_mask = (roi_ious > reg_fg_thresh).long()
+
+        # classification label
+        iou_bg_thresh = self.roi_sampler_cfg.CLS_BG_THRESH
+
+        iou_fg_thresh = cls_fg_thresh
+
+        fg_mask = roi_ious > iou_fg_thresh
+        bg_mask = roi_ious < iou_bg_thresh
+        interval_mask = (fg_mask == 0) & (bg_mask == 0)
+        cls_labels = (fg_mask > 0).float()
+        iou_fg_thresh = iou_fg_thresh[interval_mask] if self.roi_sampler_cfg.USE_ULB_CLS_FG_THRESH_FOR_LB else iou_fg_thresh
+        cls_labels[interval_mask] = (roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
+
+        return sampled_inds, reg_valid_mask, cls_labels, roi_ious, gt_assignment, interval_mask
+
     # TODO(farzad) Our previous method for unlabeled samples. Test it for the new implementation.
     def subsample_labeled_rois(self, batch_dict, index):
         cur_roi = batch_dict['rois'][index]
@@ -196,14 +243,21 @@ class ProposalTargetLayer(nn.Module):
 
         return sampled_inds, reg_valid_mask, cls_labels, roi_ious, gt_assignment, interval_mask
 
-    def subsample_rois(self, max_overlaps):
+    def subsample_rois(self, max_overlaps, reg_fg_thresh=None, cls_fg_thresh=None):
+        if reg_fg_thresh is None:
+            reg_fg_thresh = self.roi_sampler_cfg.REG_FG_THRESH
+        if cls_fg_thresh is None:
+            cls_fg_thresh = self.roi_sampler_cfg.CLS_FG_THRESH
         # sample fg, easy_bg, hard_bg
         fg_rois_per_image = int(np.round(self.roi_sampler_cfg.FG_RATIO * self.roi_sampler_cfg.ROI_PER_IMAGE))
-        fg_thresh = min(self.roi_sampler_cfg.REG_FG_THRESH, self.roi_sampler_cfg.CLS_FG_THRESH)
+        if isinstance(reg_fg_thresh, torch.Tensor):
+            fg_thresh = torch.min(reg_fg_thresh, cls_fg_thresh)
+        else:
+            fg_thresh = min(reg_fg_thresh, cls_fg_thresh)
 
         fg_inds = ((max_overlaps >= fg_thresh)).nonzero().view(-1)  # > 0.55
         easy_bg_inds = ((max_overlaps < self.roi_sampler_cfg.CLS_BG_THRESH_LO)).nonzero().view(-1)  # < 0.1
-        hard_bg_inds = ((max_overlaps < self.roi_sampler_cfg.REG_FG_THRESH) &
+        hard_bg_inds = ((max_overlaps < reg_fg_thresh) &
                 (max_overlaps >= self.roi_sampler_cfg.CLS_BG_THRESH_LO)).nonzero().view(-1)
 
         fg_num_rois = fg_inds.numel()

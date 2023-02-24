@@ -202,14 +202,14 @@ MODEL:
             CLS_WEIGHT: 0.35
             CLS_FG_THRESH: 0.75
             CLS_BG_THRESH: 0.25
-            UNLABELED_CLS_FG_THRESH: [0.7, 0.3, 0.4]
+            UNLABELED_CLS_FG_THRESH: [0.65, 0.45, 0.4]
             UNLABELED_CLS_BG_THRESH: 0.25
             CLS_BG_THRESH_LO: 0.1
             HARD_BG_RATIO: 0.8
 
             REG_FG_THRESH: 0.55
-            UNLABELED_REG_FG_THRESH: [0.65, 0.45, 0.4]
-            UNLABELED_SAMPLER_TYPE: subsample_labeled_rois
+            UNLABELED_REG_FG_THRESH: [0.55, 0.55, 0.55]
+            UNLABELED_SAMPLER_TYPE: subsample_unlabeled_rois_classwise
             UNLABELED_SAMPLE_EASY_BG: True
             UNLABELED_SHARP_RCNN_CLS_LABELS: True
             UNLABELED_USE_CALIBRATED_IOUS: True
