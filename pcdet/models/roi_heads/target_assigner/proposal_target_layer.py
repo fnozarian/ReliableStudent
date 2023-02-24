@@ -245,7 +245,7 @@ class ProposalTargetLayer(nn.Module):
 
         fg_inds = ((max_overlaps >= fg_thresh)).nonzero().view(-1)  # > 0.55
         easy_bg_inds = ((max_overlaps < self.roi_sampler_cfg.CLS_BG_THRESH_LO)).nonzero().view(-1)  # < 0.1
-        hard_bg_inds = ((max_overlaps < reg_fg_thresh) &
+        hard_bg_inds = ((max_overlaps < fg_thresh) &
                 (max_overlaps >= self.roi_sampler_cfg.CLS_BG_THRESH_LO)).nonzero().view(-1)
 
         fg_num_rois = fg_inds.numel()

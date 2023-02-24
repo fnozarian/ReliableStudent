@@ -541,7 +541,7 @@ class RoIHeadTemplate(nn.Module):
             # Note that it only defines the weights for unlabeled samples. All labeled samples receive one as weight.
             unlabeled_inds = self.forward_ret_dict['unlabeled_inds']
 
-            if self.model_cfg.TARGET_CONFIG.get("UNLABELED_SAMPLER_TYPE", None) != 'subsample_labeled_rois':
+            if self.model_cfg.TARGET_CONFIG.get("UNLABELED_SAMPLER_TYPE", None) == 'subsample_unlabeled_rois_default':
                 gt_iou_of_rois = self.forward_ret_dict['gt_iou_of_rois'][unlabeled_inds].detach().clone()
                 roi_labels = self.forward_ret_dict['roi_labels'][unlabeled_inds].detach().clone() - 1
 
