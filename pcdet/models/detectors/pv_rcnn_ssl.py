@@ -265,6 +265,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             batch_dict['metric_registry'] = self.metric_registry
             batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
+            batch_dict['store_scores_in_pkl'] = self.model_cfg.STORE_SCORES_IN_PKL
             for cur_module in self.pv_rcnn.module_list:
                 if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
                     # Pass teacher's proposal to the student.

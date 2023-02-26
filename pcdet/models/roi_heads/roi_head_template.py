@@ -321,11 +321,12 @@ class RoIHeadTemplate(nn.Module):
         # Adding points temporarily to the targets_dict for visualization inside update_metrics
         targets_dict['points'] = batch_dict['points']
 
-                # Extract number of points in ROIs
-        num_point_in_rois = roiaware_pool3d_utils.points_in_boxes_cpu(targets_dict['points'][:, 1:4].cpu(),
-                                                                    targets_dict['rois'].view(-1,7).cpu()).squeeze(0).sum(1)
-        targets_dict['num_points_in_roi'] = num_point_in_rois.reshape(targets_dict['rois'].shape[0], \
-                                                                    targets_dict['rois'].shape[1])
+        # Extract number of points in ROIs
+        if batch_dict['store_scores_in_pkl']:
+            num_point_in_rois = roiaware_pool3d_utils.points_in_boxes_cpu(targets_dict['points'][:, 1:4].cpu(),
+                                                                        targets_dict['rois'].view(-1,7).cpu()).squeeze(0).sum(1)
+            targets_dict['num_points_in_roi'] = num_point_in_rois.reshape(targets_dict['rois'].shape[0], \
+                                                                        targets_dict['rois'].shape[1])
 
         rois = targets_dict['rois']  # (B, N, 7 + C)
         gt_of_rois = targets_dict['gt_of_rois']  # (B, N, 7 + C + 1)
