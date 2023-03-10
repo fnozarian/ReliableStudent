@@ -148,7 +148,9 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.supervise_mode = model_cfg.SUPERVISE_MODE
         cls_bg_thresh = model_cfg.ROI_HEAD.TARGET_CONFIG.CLS_BG_THRESH
         self.metric_registry = MetricRegistry(dataset=self.dataset, model_cfg=model_cfg)
-        vals_to_store = ['iou_roi_pl', 'iou_roi_gt', 'pred_scores', 'weights', 'class_labels', 'iteration']
+        vals_to_store = ['iou_roi_pl', 'iou_roi_gt', 'pred_scores', 'teacher_pred_scores', 
+                        'weights', 'roi_scores', 'pcv_scores', 'num_points_in_roi', 'class_labels',
+                        'iteration']
         self.val_dict = {val: [] for val in vals_to_store}
 
     def forward(self, batch_dict):
@@ -263,6 +265,7 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             batch_dict['metric_registry'] = self.metric_registry
             batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
+            batch_dict['store_scores_in_pkl'] = self.model_cfg.STORE_SCORES_IN_PKL
             for cur_module in self.pv_rcnn.module_list:
                 if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
                     # Pass teacher's proposal to the student.
@@ -357,36 +360,38 @@ class PVRCNN_SSL(Detector3DTemplate):
             loss_point, tb_dict = self.pv_rcnn.point_head.get_loss(tb_dict, scalar=False)
             loss_rcnn_cls, loss_rcnn_box, ulb_loss_cls_dist, tb_dict = self.pv_rcnn.roi_head.get_loss(tb_dict, scalar=False)
 
+            # Use the same reduction method as the baseline model (3diou) by the default
+            reduce_loss = getattr(torch, self.model_cfg.REDUCE_LOSS, 'sum')
             if not self.unlabeled_supervise_cls:
-                loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].mean()
+                    loss_rpn_cls = reduce_loss(loss_rpn_cls[labeled_inds, ...])
             else:
-                loss_rpn_cls = loss_rpn_cls[labeled_inds, ...].mean() + loss_rpn_cls[unlabeled_inds, ...].mean() * self.unlabeled_weight
+                loss_rpn_cls = reduce_loss(loss_rpn_cls[labeled_inds, ...]) + reduce_loss(loss_rpn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
 
-            loss_rpn_box = loss_rpn_box[labeled_inds, ...].mean() + loss_rpn_box[unlabeled_inds, ...].mean() * self.unlabeled_weight
-            loss_point = loss_point[labeled_inds, ...].mean()
+            loss_rpn_box = reduce_loss(loss_rpn_box[labeled_inds, ...]) + reduce_loss(loss_rpn_box[unlabeled_inds, ...]) * self.unlabeled_weight
+            loss_point = reduce_loss(loss_point[labeled_inds, ...])
             if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False):
-                loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean() + loss_rcnn_cls[unlabeled_inds, ...].mean() * self.unlabeled_weight
+                loss_rcnn_cls = reduce_loss(loss_rcnn_cls[labeled_inds, ...]) + reduce_loss(loss_rcnn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
             else:
-                loss_rcnn_cls = loss_rcnn_cls[labeled_inds, ...].mean()
+                loss_rcnn_cls = reduce_loss(loss_rcnn_cls[labeled_inds, ...])
             if not self.unlabeled_supervise_refine:
-                loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].mean()
+                loss_rcnn_box = reduce_loss(loss_rcnn_box[labeled_inds, ...])
             else:
-                loss_rcnn_box = loss_rcnn_box[labeled_inds, ...].mean() + loss_rcnn_box[unlabeled_inds, ...].mean() * self.unlabeled_weight
+                loss_rcnn_box = reduce_loss(loss_rcnn_box[labeled_inds, ...]) + reduce_loss(loss_rcnn_box[unlabeled_inds, ...]) * self.unlabeled_weight
             if self.model_cfg['ROI_HEAD'].get('ENABLE_ULB_CLS_DIST_LOSS', False):
-                loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box + ulb_loss_cls_dist
+                    loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box + ulb_loss_cls_dist
             else:
                 loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box
             tb_dict_ = {}
             for key in tb_dict.keys():
                 if 'loss' in key:
-                    tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].mean()
-                    tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
+                    tb_dict_[key+"_labeled"] = reduce_loss(tb_dict[key][labeled_inds, ...])
+                    tb_dict_[key + "_unlabeled"] = reduce_loss(tb_dict[key][unlabeled_inds, ...])
                 elif 'acc' in key:
-                    tb_dict_[key+"_labeled"] = tb_dict[key][labeled_inds, ...].mean()
-                    tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
+                    tb_dict_[key+"_labeled"] = reduce_loss(tb_dict[key][labeled_inds, ...])
+                    tb_dict_[key + "_unlabeled"] = reduce_loss(tb_dict[key][unlabeled_inds, ...])
                 elif 'point_pos_num' in key:
-                    tb_dict_[key + "_labeled"] = tb_dict[key][labeled_inds, ...].mean()
-                    tb_dict_[key + "_unlabeled"] = tb_dict[key][unlabeled_inds, ...].mean()
+                    tb_dict_[key + "_labeled"] = reduce_loss(tb_dict[key][labeled_inds, ...])
+                    tb_dict_[key + "_unlabeled"] = reduce_loss(tb_dict[key][unlabeled_inds, ...])
                 else:
                     tb_dict_[key] = tb_dict[key]
 
@@ -428,10 +433,23 @@ class PVRCNN_SSL(Detector3DTemplate):
                         cur_pred_score = torch.sigmoid(batch_dict['batch_cls_preds'][cur_unlabeled_ind]).squeeze()
                         self.val_dict['pred_scores'].extend(cur_pred_score.tolist())
 
-                        cur_weight = self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_weights'][cur_unlabeled_ind]
-                        self.val_dict['weights'].extend(cur_weight.tolist())
+                        if 'rcnn_cls_score_teacher' in self.pv_rcnn.roi_head.forward_ret_dict:
+                            cur_teacher_pred_score = self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'][cur_unlabeled_ind]
+                            self.val_dict['teacher_pred_scores'].extend(cur_teacher_pred_score.tolist())
 
-                        cur_roi_label = batch_dict['roi_labels'][cur_unlabeled_ind].squeeze()
+                            cur_weight = self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_weights'][cur_unlabeled_ind]
+                            self.val_dict['weights'].extend(cur_weight.tolist())
+
+                        cur_roi_score =  torch.sigmoid(self.pv_rcnn.roi_head.forward_ret_dict['roi_scores'][cur_unlabeled_ind])
+                        self.val_dict['roi_scores'].extend(cur_roi_score.tolist())
+
+                        cur_pcv_score = self.pv_rcnn.roi_head.forward_ret_dict['pcv_scores'][cur_unlabeled_ind]
+                        self.val_dict['pcv_scores'].extend(cur_pcv_score.tolist())
+
+                        cur_num_points_roi = self.pv_rcnn.roi_head.forward_ret_dict['num_points_in_roi'][cur_unlabeled_ind]
+                        self.val_dict['num_points_in_roi'].extend(cur_num_points_roi.tolist())
+
+                        cur_roi_label = self.pv_rcnn.roi_head.forward_ret_dict['roi_labels'][cur_unlabeled_ind].squeeze()
                         self.val_dict['class_labels'].extend(cur_roi_label.tolist())
 
                         cur_iteration = torch.ones_like(preds_iou_max) * (batch_dict['cur_iteration'])

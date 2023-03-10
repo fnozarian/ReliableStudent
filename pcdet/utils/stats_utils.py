@@ -34,13 +34,16 @@ class PredQualityMetrics(Metric):
         # We use _tp if a pred is fg wrt gt and fg wrt pl.
         # We use _fn if a pred is fg wrt gt and not fg wrt pl.
         # We use _fp if a pred is not fg wrt gt and fg wrt pl.
-        self.metrics_name = ["pred_ious", "pred_fgs", "sem_score_fgs", "sem_score_bgs", "score_fgs", "score_bgs",
-                             "target_score_bg", "num_pred_boxes", "num_gt_boxes", "pred_weight_fg", "pred_weight_bg",
-                             "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc",
+        self.metrics_name = ["pred_ious", "pred_fgs", "sem_score_fgs", "sem_score_bgs", "score_fgs", "pred_ious_bgs",
+                             "score_bgs", "target_score_bg", "num_pred_boxes", "num_gt_boxes", "pred_weight_fg",
+                             "pred_weight_bg", "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc",
                              "pred_weight_uc", "pred_fn_rate", "pred_tp_rate", "pred_fp_ratio", "pred_ious_wrt_pl_fg",
                              "pred_ious_wrt_pl_fn", "pred_ious_wrt_pl_fp", "pred_ious_wrt_pl_tp", "score_fgs_tp",
                              "score_fgs_fn", "score_fgs_fp", "target_score_fn", "target_score_tp", "target_score_fp",
-                             "pred_weight_fn", "pred_weight_tp", "pred_weight_fp"]
+                             "pred_weight_fn", "pred_weight_tp", "pred_weight_fp", "uc_pred_fn_rate", "uc_pred_fp_rate",
+                             "uc_pred_ious_wrt_pl_fn", "uc_pred_ious_wrt_pl_fp", "uc_score_fn", "uc_score_fp", 
+                             "uc_target_score_fn", "uc_target_score_fp", "uc_pred_weight_fn", "uc_pred_weight_fp"]
+                             
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
         self.class_agnostic_fg_thresh = 0.7
         for metric_name in self.metrics_name:
@@ -132,6 +135,7 @@ class PredQualityMetrics(Metric):
                     classwise_metrics['score_ucs'][cind] = cls_score_uc
 
                     cls_bg_mask = pred_cls_mask & bg_mask
+                    classwise_metrics['pred_ious_bgs'][cind] = (preds_iou_max * cls_bg_mask.float()).sum() / cls_bg_mask.sum()
                     cls_score_bg = (valid_pred_scores * cls_bg_mask.float()).sum() / torch.clamp(bg_mask.float().sum(), min=1.0)
                     classwise_metrics['score_bgs'][cind] = cls_score_bg
 
@@ -201,6 +205,28 @@ class PredQualityMetrics(Metric):
                             classwise_metrics['pred_weight_tp'][cind] = cls_pred_weight_cc_tp
                             cls_pred_weight_cc_fp = (valid_pred_weights * fp_mask).sum() / fp_mask.float().sum()
                             classwise_metrics['pred_weight_fp'][cind] = cls_pred_weight_cc_fp
+                        
+                        # ------ Foreground misclassification metrics for IoUs lying in UC region (wrt PLs) ------
+                        uc_fn_mask = cls_uc_mask_wrt_pl & cc_fg_mask
+                        uc_fp_mask = cls_uc_mask_wrt_pl & (cls_bg_mask | cc_uc_mask)
+                        classwise_metrics['uc_pred_fn_rate'][cind] = uc_fn_mask.sum() / cls_uc_mask_wrt_pl.sum()
+                        classwise_metrics['uc_pred_fp_rate'][cind] = uc_fp_mask.sum() / cls_uc_mask_wrt_pl.sum()
+                        classwise_metrics['uc_pred_ious_wrt_pl_fn'][cind] = (valid_pred_iou_wrt_pl * uc_fn_mask.float()).sum() / uc_fn_mask.sum()
+                        classwise_metrics['uc_pred_ious_wrt_pl_fp'][cind] = (valid_pred_iou_wrt_pl * uc_fp_mask.float()).sum() / uc_fp_mask.sum()
+                        uc_cls_score_fn = (valid_pred_scores * uc_fn_mask.float()).sum() / uc_fn_mask.sum()
+                        uc_cls_score_fp = (valid_pred_scores * uc_fp_mask.float()).sum() / uc_fp_mask.sum()
+                        classwise_metrics['uc_score_fn'][cind] = uc_cls_score_fn
+                        classwise_metrics['uc_score_fp'][cind] = uc_cls_score_fp
+                        if valid_target_scores is not None:
+                            uc_cls_target_score_fn = (valid_target_scores * uc_fn_mask.float()).sum() / uc_fn_mask.sum()
+                            classwise_metrics['uc_target_score_fn'][cind] = uc_cls_target_score_fn
+                            uc_cls_target_score_fp = (valid_target_scores * uc_fp_mask.float()).sum() / uc_fp_mask.sum()
+                            classwise_metrics['uc_target_score_fp'][cind] = uc_cls_target_score_fp
+                        if valid_pred_weights is not None:
+                            uc_cls_pred_weight_fn = (valid_pred_weights * uc_fn_mask.float()).sum() / uc_fn_mask.sum()
+                            classwise_metrics['uc_pred_weight_fn'][cind] = uc_cls_pred_weight_fn
+                            uc_cls_pred_weight_fp = (valid_pred_weights * uc_fp_mask).sum() / uc_fp_mask.float().sum()
+                            classwise_metrics['uc_pred_weight_fp'][cind] = uc_cls_pred_weight_fp
 
             for key, val in classwise_metrics.items():
                 # Note that unsqueeze is necessary because torchmetric performs the dist cat on dim 0.
