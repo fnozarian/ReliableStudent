@@ -284,10 +284,6 @@ class Detector3DTemplate(nn.Module):
 
                 if self.training:
                     final_sem_scores = torch.sigmoid(sem_scores[selected])
-                    if 'batch_box_preds_var' in batch_dict.keys():
-                        final_box_vars = batch_dict['batch_box_preds_var'][index, selected]
-                    if 'batch_cls_preds_var' in batch_dict.keys():
-                        final_cls_vars = batch_dict['batch_cls_preds_var'][index, selected]
 
             if not no_recall_dict:
                 recall_dict = self.generate_recall_record(
@@ -303,10 +299,6 @@ class Detector3DTemplate(nn.Module):
             }
             if self.training:
                 record_dict['pred_sem_scores'] = final_sem_scores
-                if 'batch_box_preds_var' in batch_dict.keys():
-                    record_dict['pred_boxes_var'] = final_box_vars
-                if 'batch_cls_preds_var' in batch_dict.keys():
-                    record_dict['pred_scores_var'] = final_cls_vars
 
             pred_dicts.append(record_dict)
 
