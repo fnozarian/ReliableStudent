@@ -160,7 +160,6 @@ MODEL:
         NAME: PVRCNNHead
         CLASS_AGNOSTIC: True
         ENABLE_VIS: False
-        ENABLE_RELIABILITY: False
         ENABLE_SOFT_TEACHER: False
         ENABLE_EVAL: True
         METRICS_PRED_TYPES: [roi_pl_gt, pl_gt_metrics_before_filtering]
@@ -207,10 +206,6 @@ MODEL:
 
             REG_FG_THRESH: 0.55
             UNLABELED_REG_FG_THRESH: [0.55, 0.55, 0.55]
-            UNLABELED_SAMPLER_TYPE: subsample_unlabeled_rois_classwise
-            UNLABELED_SAMPLE_EASY_BG: True
-            UNLABELED_SHARP_RCNN_CLS_LABELS: True
-            UNLABELED_USE_CALIBRATED_IOUS: True
 
         LOSS_CONFIG:
             UL_RCNN_CLS_WEIGHT_TYPE: 'interval-only' # two options: `all` or `interval-only`

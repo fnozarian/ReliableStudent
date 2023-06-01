@@ -312,13 +312,6 @@ class RoIHeadTemplate(nn.Module):
         # Adding points temporarily to the targets_dict for visualization inside update_metrics
         targets_dict['points'] = batch_dict['points']
 
-        # Extract number of points in ROIs
-        if batch_dict['store_scores_in_pkl']:
-            num_point_in_rois = roiaware_pool3d_utils.points_in_boxes_cpu(targets_dict['points'][:, 1:4].cpu(),
-                                                                        targets_dict['rois'].view(-1,7).cpu()).squeeze(0).sum(1)
-            targets_dict['num_points_in_roi'] = num_point_in_rois.reshape(targets_dict['rois'].shape[0], \
-                                                                        targets_dict['rois'].shape[1])
-
         rois = targets_dict['rois']  # (B, N, 7 + C)
         gt_of_rois = targets_dict['gt_of_rois']  # (B, N, 7 + C + 1)
         targets_dict['gt_of_rois_src'] = gt_of_rois.clone().detach()
@@ -515,13 +508,10 @@ class RoIHeadTemplate(nn.Module):
                 
                 # Hard labeling for FGs/BGs, soft labeling for UCs
                 gt_iou_of_rois[ignore_mask] = -1
-                if self.model_cfg.TARGET_CONFIG.get("UNLABELED_SHARP_RCNN_CLS_LABELS", False):
-                    gt_iou_of_rois[ulb_fg_mask] = 1.
-                    gt_iou_of_rois[ulb_bg_mask] = 0.
-                # Calibrate(normalize) raw IoUs as per FG and BG thresholds 
-                if self.model_cfg.TARGET_CONFIG.get("UNLABELED_USE_CALIBRATED_IOUS", False):
-                    gt_iou_of_rois[ulb_interval_mask]  = (gt_iou_of_rois[ulb_interval_mask] - cls_bg_thresh) \
-                                                        / (cls_fg_thresh[ulb_interval_mask] - cls_bg_thresh)
+                gt_iou_of_rois[ulb_fg_mask] = 1.
+                gt_iou_of_rois[ulb_bg_mask] = 0.
+                gt_iou_of_rois[ulb_interval_mask]  = (gt_iou_of_rois[ulb_interval_mask] - cls_bg_thresh) \
+                                                    / (cls_fg_thresh[ulb_interval_mask] - cls_bg_thresh)
 
                 self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] = gt_iou_of_rois
                 self.forward_ret_dict['interval_mask'][unlabeled_inds] = ulb_interval_mask
