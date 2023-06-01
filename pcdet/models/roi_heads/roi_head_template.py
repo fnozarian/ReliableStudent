@@ -107,20 +107,18 @@ class RoIHeadTemplate(nn.Module):
         batch_dict.pop('batch_index', None)
         return batch_dict
 
-    def update_metrics(self, targets_dict, mask_type='cls', vis_type='pred_gt', pred_type=None):
+    def update_metrics(self, targets_dict):
         metric_registry = targets_dict['metric_registry']
         unlabeled_inds = targets_dict['unlabeled_inds']
 
         sample_preds, sample_pred_scores, sample_pred_weights = [], [], []
         sample_rois, sample_roi_scores = [], []
-        sample_targets, sample_target_scores = [], []
-        sample_pls, sample_pl_scores = [], []
-        ema_preds_of_std_rois, ema_pred_scores_of_std_rois = [], []
+        sample_target_scores = []
+        sample_pls = []
         sample_gts = []
         sample_gt_iou_of_rois = []
         for i, uind in enumerate(unlabeled_inds):
-            mask = (targets_dict['reg_valid_mask'][uind] > 0) if mask_type == 'reg' else (
-                        targets_dict['rcnn_cls_labels'][uind] >= 0)
+            mask = targets_dict['rcnn_cls_labels'][uind] >= 0
 
             # (Proposals) ROI info
             rois = targets_dict['rois'][uind][mask].detach().clone()
@@ -131,106 +129,38 @@ class RoIHeadTemplate(nn.Module):
             sample_rois.append(roi_labeled_boxes)
             sample_roi_scores.append(roi_scores)
             sample_gt_iou_of_rois.append(gt_iou_of_rois)
+            
             # Target info
-            target_labeled_boxes = targets_dict['gt_of_rois_src'][uind][mask].detach().clone()
             target_scores = targets_dict['rcnn_cls_labels'][uind][mask].detach().clone()
-            sample_targets.append(target_labeled_boxes)
             sample_target_scores.append(target_scores)
 
-            # Pred info
+            # Student's Pred box and score info
             pred_boxes = targets_dict['batch_box_preds'][uind][mask].detach().clone()
             pred_scores = torch.sigmoid(targets_dict['rcnn_cls']).view_as(targets_dict['rcnn_cls_labels'])[uind][mask].detach().clone()
             pred_labeled_boxes = torch.cat([pred_boxes, roi_labels], dim=-1)
             sample_preds.append(pred_labeled_boxes)
             sample_pred_scores.append(pred_scores)
 
-            # (Real labels) GT info
+            # (Real labels) GT box info
             gt_labeled_boxes = targets_dict['ori_unlabeled_boxes'][i]
             sample_gts.append(gt_labeled_boxes)
 
-            # (Pseudo labels) PL info
+            # (Pseudo labels) PL box info
             pl_labeled_boxes = targets_dict['pl_boxes'][uind]
-            pl_scores = targets_dict['pl_scores'][i]
             sample_pls.append(pl_labeled_boxes)
-            sample_pl_scores.append(pl_scores)
 
-            # Teacher refinements (Preds) of student's rois
-            if 'ema_gt' in pred_type and self.get('ENABLE_SOFT_TEACHER', False):
-                pred_boxes_ema = targets_dict['batch_box_preds_teacher'][uind][mask].detach().clone()
-                pred_labeled_boxes_ema = torch.cat([pred_boxes_ema, roi_labels], dim=-1)
-                pred_scores_ema = targets_dict['rcnn_cls_score_teacher'][uind][mask].detach().clone()
-                ema_preds_of_std_rois.append(pred_labeled_boxes_ema)
-                ema_pred_scores_of_std_rois.append(pred_scores_ema)
-            if self.model_cfg.get('ENABLE_SOFT_TEACHER', False):
-                pred_weights = targets_dict['rcnn_cls_weights'][uind][mask].detach().clone()
-                sample_pred_weights.append(pred_weights)
-            if self.model_cfg.get('ENABLE_VIS', False):
-                points_mask = targets_dict['points'][:, 0] == uind
-                points = targets_dict['points'][points_mask, 1:]
-                gt_boxes = gt_labeled_boxes[:, :-1]  # Default GT option
-                if vis_type == 'roi_gt':
-                    vis_pred_boxes = roi_labeled_boxes[:, :-1]
-                    vis_pred_scores = roi_scores
-                elif vis_type == 'roi_pl':
-                    vis_pred_boxes = roi_labeled_boxes[:, :-1]
-                    vis_pred_scores = roi_scores
-                    gt_boxes = pl_labeled_boxes[:, :-1]
-                elif vis_type == 'target_gt':
-                    vis_pred_boxes = target_labeled_boxes[:, :-1]
-                    vis_pred_scores = target_scores
-                elif vis_type == 'pred_gt':
-                    vis_pred_boxes = pred_boxes
-                    vis_pred_scores = pred_scores
-                elif vis_type == 'ema_gt' and self.model_cfg.get('ENABLE_SOFT_TEACHER', False):
-                    vis_pred_boxes = targets_dict['batch_box_preds_teacher'][uind][mask].detach().clone()
-                    vis_pred_scores = targets_dict['rcnn_cls_score_teacher'][uind][mask].detach().clone()
-                else:
-                    raise ValueError(vis_type)
+            # Reliability weight info
+            pred_weights = targets_dict['rcnn_cls_weights'][uind][mask].detach().clone()
+            sample_pred_weights.append(pred_weights)
 
-                V.vis(points, gt_boxes=gt_boxes, pred_boxes=vis_pred_boxes,
-                      pred_scores=vis_pred_scores, pred_labels=roi_labels.view(-1),
-                      filename=f'vis_{vis_type}_{uind}.png')
-
-        sample_pred_weights = sample_pred_weights if len(sample_pred_weights) > 0 else None
-
-        if 'pred_gt' in pred_type:
-            tag = f'rcnn_pred_gt_metrics_{mask_type}'
-            metrics = metric_registry.get(tag)
-            metric_inputs = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois,
-                             'roi_scores': sample_roi_scores, 'ground_truths': sample_gts,
-                             'targets': sample_targets, 'target_scores': sample_target_scores,
-                             'pred_weights': sample_pred_weights}
-            metrics.update(**metric_inputs)
-        if 'ema_gt' in pred_type and self.model_cfg.get('ENABLE_SOFT_TEACHER', False):
-            tag = f'rcnn_ema_gt_metrics_{mask_type}'
-            metrics_ema = metric_registry.get(tag)
-            metric_inputs_ema = {'preds': ema_preds_of_std_rois, 'pred_scores': ema_pred_scores_of_std_rois,
-                                 'ground_truths': sample_gts, 'pred_weights': sample_pred_weights}
-            metrics_ema.update(**metric_inputs_ema)
-        if 'roi_pl' in pred_type:
-            tag = f'rcnn_roi_pl_metrics_{mask_type}'
-            metrics_roi_pl = metric_registry.get(tag)
-            metric_inputs_roi_pl = {'preds': sample_rois, 'pred_scores': sample_roi_scores, 'ground_truths': sample_pls,
-                                    'targets': sample_targets, 'target_scores': sample_target_scores,
-                                    'pred_weights': sample_pred_weights}
-            metrics_roi_pl.update(**metric_inputs_roi_pl)
-        if 'pred_pl' in pred_type:
-            tag = f'rcnn_pred_pl_metrics_{mask_type}'
-            metrics_pred_pl = metric_registry.get(tag)
-            metric_inputs_pred_pl = {'preds': sample_preds, 'pred_scores': sample_pred_scores, 'rois': sample_rois,
-                                     'roi_scores': sample_roi_scores, 'ground_truths': sample_pls,
-                                     'targets': sample_targets, 'target_scores': sample_target_scores,
-                                     'pred_weights': sample_pred_weights}
-            metrics_pred_pl.update(**metric_inputs_pred_pl)
-        if 'roi_pl_gt' in pred_type:
-            tag = f'rcnn_roi_pl_gt_metrics_{mask_type}'
-            metrics = metric_registry.get(tag)
-            metric_inputs = {'preds': sample_rois, 'pred_scores': sample_roi_scores,
-                             'ground_truths': sample_gts, 'targets': sample_targets,
-                             'pseudo_labels': sample_pls, 'pseudo_label_scores': sample_pl_scores,
-                             'target_scores': sample_target_scores, 'pred_weights': sample_pred_weights,
-                             'pred_iou_wrt_pl': sample_gt_iou_of_rois}
-            metrics.update(**metric_inputs)
+        # Update metrics with above infos
+        tag = f'rcnn_roi_pl_gt_metrics_cls'
+        metrics = metric_registry.get(tag)
+        metric_inputs = {'preds': sample_rois, 'pred_scores': sample_roi_scores,
+                        'ground_truths': sample_gts, 'pseudo_labels': sample_pls,
+                        'target_scores': sample_target_scores, 'pred_weights': sample_pred_weights,
+                        'pred_iou_wrt_pl': sample_gt_iou_of_rois}
+        metrics.update(**metric_inputs)
 
     def assign_targets(self, batch_dict):
 
@@ -238,9 +168,6 @@ class RoIHeadTemplate(nn.Module):
             targets_dict = self.proposal_target_layer.forward(batch_dict)
 
         batch_size = batch_dict['batch_size']
-
-        # Adding points temporarily to the targets_dict for visualization inside update_metrics
-        targets_dict['points'] = batch_dict['points']
 
         rois = targets_dict['rois']  # (B, N, 7 + C)
         gt_of_rois = targets_dict['gt_of_rois']  # (B, N, 7 + C + 1)
@@ -368,12 +295,12 @@ class RoIHeadTemplate(nn.Module):
                 batch_size = forward_ret_dict['rcnn_cls_labels'].shape[0]
                 batch_loss_cls = batch_loss_cls.reshape(batch_size, -1)
                 cls_valid_mask = cls_valid_mask.reshape(batch_size, -1)
-                if 'rcnn_cls_weights' in forward_ret_dict:
-                    rcnn_cls_weights = forward_ret_dict['rcnn_cls_weights']
-                    rcnn_loss_cls_norm = (cls_valid_mask * rcnn_cls_weights).sum(-1)
-                    rcnn_loss_cls = (batch_loss_cls * cls_valid_mask * rcnn_cls_weights).sum(-1) / torch.clamp(rcnn_loss_cls_norm, min=1.0)
-                else:
-                    rcnn_loss_cls = (batch_loss_cls * cls_valid_mask).sum(-1) / torch.clamp(cls_valid_mask.sum(-1), min=1.0)
+                
+                # Use reliability weights to suppress loss for FP/FN samples
+                rcnn_cls_weights = forward_ret_dict['rcnn_cls_weights']
+                rcnn_loss_cls_norm = (cls_valid_mask * rcnn_cls_weights).sum(-1)
+                rcnn_loss_cls = (batch_loss_cls * cls_valid_mask * rcnn_cls_weights).sum(-1) / torch.clamp(rcnn_loss_cls_norm, min=1.0)
+                
                 rcnn_acc_cls = torch.abs(torch.sigmoid(rcnn_cls_flat) - rcnn_cls_labels).reshape(batch_size, -1)
                 rcnn_acc_cls = (rcnn_acc_cls * cls_valid_mask).sum(-1) / torch.clamp(cls_valid_mask.sum(-1), min=1.0)
         elif loss_cfgs.CLS_LOSS == 'CrossEntropy':
@@ -409,56 +336,11 @@ class RoIHeadTemplate(nn.Module):
         
         ul_interval_mask = self.forward_ret_dict['interval_mask'][unlabeled_inds]
 
-        # --------------Use weights for UC region only--------------
-        # suppressing false negatives from UC region
-        if self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fn-uc':
-            unlabeled_rcnn_cls_weights[ul_interval_mask] = rcnn_bg_score_teacher[unlabeled_inds][ul_interval_mask]
-        # suppressing false positives from UC region
-        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fp-uc':           
-            unlabeled_rcnn_cls_weights[ul_interval_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ul_interval_mask]
-        
-        # --------------Use weights for BG region only--------------
-        # suppressing false negatives from BG region
-        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'bg':
-            ulb_bg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 0
-            unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
-        
-        # --------------Use weights for FG region only--------------
-        # suppressing false positives from FG region
-        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg':
-            unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
-        
-        # --------------Use weights for FG and BG region--------------
-        # Use weights as 1s for UC, suppress false positives from FG region and suppress false negatives from BG region
-        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-bg':
-            unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
-            unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
-
-        # --------------Use weights for UC and BG regions--------------
-        # Use 1s for FG, suppress false negatives from UC and BG regions
-        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fn-uc-bg':           
-            ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
-            unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
         # Use 1s for FG mask, suppress false positives from UC, false negatives from BG regions
-        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fp-uc-bg':           
-            unlabeled_rcnn_cls_weights[ul_interval_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ul_interval_mask]
-            ulb_bg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 0
-            unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
+        unlabeled_rcnn_cls_weights[ul_interval_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ul_interval_mask]
+        ulb_bg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 0
+        unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
 
-        # --------------Use weights for all regions (FG,BG and UC)--------------
-        # Suppress false positives from FG region, false negatives from BG region and UC region
-        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-fn-uc-bg':           
-            ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
-            unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
-            unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
-        # Suppress false positives from FG and UC region, false negatives from BG region
-        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-fp-uc-bg':
-            unlabeled_rcnn_cls_weights[~ulb_bg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][~ulb_bg_mask]
-            unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
-
-        else:
-            raise ValueError
-        
         return unlabeled_rcnn_cls_weights
             
 
@@ -469,10 +351,8 @@ class RoIHeadTemplate(nn.Module):
         unlabeled_inds = self.forward_ret_dict['unlabeled_inds']
         self.forward_ret_dict['rcnn_cls_weights'][unlabeled_inds] = self._get_reliability_weight(unlabeled_inds)
 
-        if self.model_cfg.get("ENABLE_EVAL", None):
-            metrics_pred_types = self.model_cfg.get("METRICS_PRED_TYPES", None)
-            if metrics_pred_types is not None:
-                self.update_metrics(self.forward_ret_dict, mask_type='cls', pred_type=metrics_pred_types, vis_type='roi_pl')
+        if self.model_cfg.get("ENABLE_METRICS", None):
+            self.update_metrics(self.forward_ret_dict)
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)

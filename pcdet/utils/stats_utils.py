@@ -15,10 +15,6 @@ import math
 from pcdet.config import cfg
 from matplotlib import pyplot as plt
 import torch.nn.functional as F
-# TODO(farzad): Pass only scores and labels?
-#               Calculate overlap inside update or compute?
-#               Change the states to TP, FP, FN, etc?
-#               Calculate incrementally based on summarized value?
 
 
 class PredQualityMetrics(Metric):
@@ -26,7 +22,7 @@ class PredQualityMetrics(Metric):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.reset_state_interval = kwargs.get('reset_state_interval', 64)
+        self.reset_state_interval = kwargs.get('reset_state_interval', 2)
         self.tag = kwargs.get('tag', None)
         self.dataset = kwargs.get('dataset', None)
         self.config = kwargs.get('config', None)
@@ -40,9 +36,7 @@ class PredQualityMetrics(Metric):
                              "pred_weight_uc", "pred_fn_rate", "pred_tp_rate", "pred_fp_ratio", "pred_ious_wrt_pl_fg",
                              "pred_ious_wrt_pl_fn", "pred_ious_wrt_pl_fp", "pred_ious_wrt_pl_tp", "score_fgs_tp",
                              "score_fgs_fn", "score_fgs_fp", "target_score_fn", "target_score_tp", "target_score_fp",
-                             "pred_weight_fn", "pred_weight_tp", "pred_weight_fp", "uc_pred_fn_rate", "uc_pred_fp_rate",
-                             "uc_pred_ious_wrt_pl_fn", "uc_pred_ious_wrt_pl_fp", "uc_score_fn", "uc_score_fp", 
-                             "uc_target_score_fn", "uc_target_score_fp", "uc_pred_weight_fn", "uc_pred_weight_fp"]
+                             "pred_weight_fn", "pred_weight_tp", "pred_weight_fp"]
                              
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
         self.class_agnostic_fg_thresh = 0.7
@@ -50,8 +44,8 @@ class PredQualityMetrics(Metric):
             self.add_state(metric_name, default=[], dist_reduce_fx='cat')
 
     def update(self, preds: [torch.Tensor], ground_truths: [torch.Tensor], pred_scores: [torch.Tensor],
-               rois=None, roi_scores=None, targets=None, target_scores=None, pred_weights=None,
-               pseudo_labels=None, pseudo_label_scores=None, pred_iou_wrt_pl=None) -> None:
+               roi_scores=None, target_scores=None, pred_weights=None, pseudo_labels=None, pred_iou_wrt_pl=None) -> None:
+        
         assert isinstance(preds, list) and isinstance(ground_truths, list) and isinstance(pred_scores, list)
         assert all([pred.dim() == 2 for pred in preds]) and all([pred.dim() == 2 for pred in ground_truths]) and all([pred.dim() == 1 for pred in pred_scores])
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([gt.shape[-1] == 8 for gt in ground_truths])
@@ -114,7 +108,6 @@ class PredQualityMetrics(Metric):
                     assigned_gt_cls_mask = valid_gt_boxes[assigned_gt_inds, -1] == cind
 
                     cc_mask = (pred_cls_mask & assigned_gt_cls_mask)  # correctly classified mask
-                    mc_mask = (pred_cls_mask & (~assigned_gt_cls_mask)) | ((~pred_cls_mask) & assigned_gt_cls_mask)  # misclassified mask
 
                     # Using kitti test class-wise fg threshold instead of thresholds used during train.
                     classwise_fg_thresh = self.min_overlaps[cind]
@@ -205,28 +198,6 @@ class PredQualityMetrics(Metric):
                             classwise_metrics['pred_weight_tp'][cind] = cls_pred_weight_cc_tp
                             cls_pred_weight_cc_fp = (valid_pred_weights * fp_mask).sum() / fp_mask.float().sum()
                             classwise_metrics['pred_weight_fp'][cind] = cls_pred_weight_cc_fp
-                        
-                        # ------ Foreground misclassification metrics for IoUs lying in UC region (wrt PLs) ------
-                        uc_fn_mask = cls_uc_mask_wrt_pl & cc_fg_mask
-                        uc_fp_mask = cls_uc_mask_wrt_pl & (cls_bg_mask | cc_uc_mask)
-                        classwise_metrics['uc_pred_fn_rate'][cind] = uc_fn_mask.sum() / cls_uc_mask_wrt_pl.sum()
-                        classwise_metrics['uc_pred_fp_rate'][cind] = uc_fp_mask.sum() / cls_uc_mask_wrt_pl.sum()
-                        classwise_metrics['uc_pred_ious_wrt_pl_fn'][cind] = (valid_pred_iou_wrt_pl * uc_fn_mask.float()).sum() / uc_fn_mask.sum()
-                        classwise_metrics['uc_pred_ious_wrt_pl_fp'][cind] = (valid_pred_iou_wrt_pl * uc_fp_mask.float()).sum() / uc_fp_mask.sum()
-                        uc_cls_score_fn = (valid_pred_scores * uc_fn_mask.float()).sum() / uc_fn_mask.sum()
-                        uc_cls_score_fp = (valid_pred_scores * uc_fp_mask.float()).sum() / uc_fp_mask.sum()
-                        classwise_metrics['uc_score_fn'][cind] = uc_cls_score_fn
-                        classwise_metrics['uc_score_fp'][cind] = uc_cls_score_fp
-                        if valid_target_scores is not None:
-                            uc_cls_target_score_fn = (valid_target_scores * uc_fn_mask.float()).sum() / uc_fn_mask.sum()
-                            classwise_metrics['uc_target_score_fn'][cind] = uc_cls_target_score_fn
-                            uc_cls_target_score_fp = (valid_target_scores * uc_fp_mask.float()).sum() / uc_fp_mask.sum()
-                            classwise_metrics['uc_target_score_fp'][cind] = uc_cls_target_score_fp
-                        if valid_pred_weights is not None:
-                            uc_cls_pred_weight_fn = (valid_pred_weights * uc_fn_mask.float()).sum() / uc_fn_mask.sum()
-                            classwise_metrics['uc_pred_weight_fn'][cind] = uc_cls_pred_weight_fn
-                            uc_cls_pred_weight_fp = (valid_pred_weights * uc_fp_mask).sum() / uc_fp_mask.float().sum()
-                            classwise_metrics['uc_pred_weight_fp'][cind] = uc_cls_pred_weight_fp
 
             for key, val in classwise_metrics.items():
                 # Note that unsqueeze is necessary because torchmetric performs the dist cat on dim 0.
@@ -254,218 +225,7 @@ class PredQualityMetrics(Metric):
                         classwise_results[cls] = val[cind].item()
                 final_results[key] = classwise_results
 
-            # TODO(farzad) Does calling reset in compute make a trouble?
             self.reset()
-
-        return final_results
-
-
-# TODO(farzad) This class should later be derived from PredQualityMetrics to avoid repeating the code and computation
-class KITTIEvalMetrics(Metric):
-    full_state_update: bool = False
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.reset_state_interval = kwargs.get('reset_state_interval', 256)
-        self.tag = kwargs.get('tag', None)
-        self.dataset = kwargs.get('dataset', None)
-        current_classes = self.dataset.class_names
-        self.metric = 2  # evaluation only for 3D metric (2)
-        overlap_0_7 = np.array([[0.7, 0.5, 0.5, 0.7, 0.5, 0.7],
-                                [0.7, 0.5, 0.5, 0.7, 0.5, 0.7],
-                                [0.7, 0.5, 0.5, 0.7, 0.5, 0.7]])
-        self.min_overlaps = np.expand_dims(overlap_0_7, axis=0)  # [1, num_metrics, num_cls][1, 3, 6]
-        self.class_to_name = {0: 'Car', 1: 'Pedestrian', 2: 'Cyclist', 3: 'Van', 4: 'Person_sitting', 5: 'Truck'}
-        name_to_class = {v: n for n, v in self.class_to_name.items()}
-        if not isinstance(current_classes, (list, tuple)):
-            current_classes = [current_classes]
-        current_classes_int = []
-        for curcls in current_classes:
-            if isinstance(curcls, str):
-                current_classes_int.append(name_to_class[curcls])
-            else:
-                current_classes_int.append(curcls)
-        self.current_classes = current_classes_int
-        self.min_overlaps = self.min_overlaps[:, :, self.current_classes]
-        self.add_state("detections", default=[])
-        self.add_state("groundtruths", default=[])
-        self.add_state("overlaps", default=[])
-
-    def update(self, preds: [torch.Tensor], pred_scores: [torch.Tensor], ground_truths: [torch.Tensor],
-               rois=None, roi_scores=None, targets=None, target_scores=None, pred_weights=None,
-               pseudo_labels=None, pseudo_label_scores=None, iou_wrt_pl=False) -> None:
-        if not cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
-            return
-        assert all([pred.shape[-1] == 8 for pred in preds]) and all([tar.shape[-1] == 8 for tar in ground_truths])
-        if roi_scores is not None:
-            assert len(pred_scores) == len(roi_scores)
-        preds = [pred_box.clone().detach() for pred_box in preds]
-        ground_truths = [gt_box.clone().detach() for gt_box in ground_truths]
-        pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
-        roi_scores = [score.clone().detach() for score in roi_scores] if roi_scores is not None else None
-
-        for i in range(len(preds)):
-            valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
-            valid_gts_mask = torch.logical_not(torch.all(ground_truths[i] == 0, dim=-1))
-            if pred_scores[i].ndim == 1:
-                pred_scores[i] = pred_scores[i].unsqueeze(dim=-1)
-            if roi_scores is not None and roi_scores[i].ndim == 1:
-                roi_scores[i] = roi_scores[i].unsqueeze(dim=-1)
-
-            valid_pred_boxes = preds[i][valid_preds_mask]
-            valid_gt_boxes = ground_truths[i][valid_gts_mask]
-            valid_pred_scores = pred_scores[i][valid_preds_mask.nonzero().view(-1)]
-            # valid_roi_scores = roi_scores[i][valid_preds_mask.nonzero().view(-1)] if roi_scores else None
-
-            # Starting class indices from zero
-            valid_pred_boxes[:, -1] -= 1
-            valid_gt_boxes[:, -1] -= 1
-
-            # Adding predicted scores as the last column
-            valid_pred_boxes = torch.cat([valid_pred_boxes, valid_pred_scores], dim=-1)
-
-            num_gts = valid_gts_mask.sum()
-            num_preds = valid_preds_mask.sum()
-            overlap = valid_gts_mask.new_zeros((num_preds, num_gts))
-            if num_gts > 0 and num_preds > 0:
-                overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
-
-            self.detections.append(valid_pred_boxes)
-            self.groundtruths.append(valid_gt_boxes)
-            self.overlaps.append(overlap)
-
-    def compute(self):
-        final_results = {}
-        if (len(self.detections) >= self.reset_state_interval) and cfg.MODEL.POST_PROCESSING.ENABLE_KITTI_EVAL:
-            # eval_class() takes ~45ms for each sample and linearly increasing
-            # => ~1.7s for one epoch or 37 samples (if only called once at the end of epoch).
-            kitti_eval_metrics = eval_class(self.groundtruths, self.detections, self.current_classes,
-                                 self.metric, self.min_overlaps, self.overlaps)
-            mAP_3d = get_mAP(kitti_eval_metrics["precision"])
-            mAP_3d_R40 = get_mAP_R40(kitti_eval_metrics["precision"])
-            kitti_eval_metrics.update({"mAP_3d": mAP_3d, "mAP_3d_R40": mAP_3d_R40})
-
-            # Get calculated TPs, FPs, FNs
-            # Early results might not be correct as the 41 values are initialized with zero
-            # and only a few predictions are available and thus a few thresholds are non-zero.
-            # Therefore, mean over several zero values results in low final value.
-            # detailed_stats shape (3, 1, 41, 5) where last dim is
-            # {0: 'tp', 1: 'fp', 2: 'fn', 3: 'similarity', 4: 'precision thresholds'}
-            total_num_samples = max(len(self.detections), 1)
-            detailed_stats = kitti_eval_metrics['detailed_stats']
-            raw_metrics_classwise = {}
-            for m, metric_name in enumerate(
-                    ['tps', 'fps', 'fns', 'sim', 'thresh', 'trans_err', 'orient_err', 'scale_err']):
-                if metric_name == 'sim' or metric_name == 'thresh':
-                    continue
-                class_metrics_all = {}
-                class_metrics_batch = {}
-                for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                    metric_value = np.nanmax(detailed_stats[c, 0, :, m])
-                    if not np.isnan(metric_value):
-                        class_metrics_all[cls_name] = metric_value
-                        if metric_name in ['tps', 'fps', 'fns']:
-                            class_metrics_batch[cls_name] = metric_value / total_num_samples
-                        elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
-                            class_metrics_batch[cls_name] = metric_value
-                raw_metrics_classwise[metric_name] = class_metrics_all
-                if metric_name in ['tps', 'fps', 'fns']:
-                    kitti_eval_metrics[metric_name + '_per_sample'] = class_metrics_batch
-                elif metric_name in ['trans_err', 'orient_err', 'scale_err']:
-                    kitti_eval_metrics[metric_name + '_per_tps'] = class_metrics_batch
-
-            # Get calculated PR and class distribution
-            num_lbl_samples = len(self.dataset.kitti_infos)
-            num_ulb_samples = total_num_samples
-            ulb_lbl_ratio = num_ulb_samples / num_lbl_samples
-            pred_labels, pred_scores = [], []
-            for sample_dets in self.detections:
-                if len(sample_dets) == 0:
-                    continue
-                pred_labels.append(sample_dets[:, -2])
-                pred_scores.append(sample_dets[:, -1])
-            pred_labels = torch.cat(pred_labels).to(torch.int64).view(-1)
-            pred_scores = torch.cat(pred_scores).view(-1)
-            classwise_thresh = pred_scores.new_tensor(self.min_overlaps[0, self.metric]).unsqueeze(0).repeat(
-                len(pred_labels), 1).gather(
-                dim=-1, index=pred_labels.unsqueeze(-1)).view(-1)
-            tp_mask = pred_scores >= classwise_thresh
-            pr_cls = {}
-            ulb_cls_counter = {}
-            # Because self.dataset.class_counter has other classes we only keep
-            # current classes in this dict to calculate the sum over all classes.
-            lbl_cls_counter = {}
-            for cls_id, cls_thresh in zip(self.current_classes, self.min_overlaps[0, self.metric]):
-                cls_name = self.class_to_name[cls_id]
-                num_lbl_cls = self.dataset.class_counter[cls_name]
-                cls_mask = pred_labels == cls_id
-                num_ulb_cls = (tp_mask & cls_mask).sum().item()
-                ulb_cls_counter[cls_name] = num_ulb_cls
-                lbl_cls_counter[cls_name] = num_lbl_cls
-                pr_cls[cls_name] = num_ulb_cls / (ulb_lbl_ratio * num_lbl_cls)
-
-            cls_dist = {}
-            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                cls_dist[cls_name+'_lbl'] = lbl_cls_counter[cls_name] / sum(lbl_cls_counter.values())
-                cls_dist[cls_name+'_ulb'] = ulb_cls_counter[cls_name] / sum(ulb_cls_counter.values())
-            lbl_dist = torch.tensor(list(lbl_cls_counter.values())) / sum(lbl_cls_counter.values())
-            ulb_dist = torch.tensor(list(ulb_cls_counter.values())) / sum(ulb_cls_counter.values())
-
-            kl_div = F.kl_div(ulb_dist.log().unsqueeze(0), lbl_dist.unsqueeze(0), reduction="batchmean").item()
-            kitti_eval_metrics['class_distribution'] = cls_dist
-            kitti_eval_metrics['kl_div'] = kl_div
-            kitti_eval_metrics['PR'] = pr_cls
-
-            # Get calculated Precision
-            for m, metric_name in enumerate(['mAP_3d', 'mAP_3d_R40']):
-                class_metrics_all = {}
-                for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                    metric_value = kitti_eval_metrics[metric_name][c].item()
-                    if not np.isnan(metric_value):
-                        class_metrics_all[cls_name] = metric_value
-                kitti_eval_metrics[metric_name] = class_metrics_all
-
-            # Get calculated recall
-            class_metrics_all = {}
-            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                metric_value = np.nanmax(kitti_eval_metrics['raw_recall'][c])
-                if not np.isnan(metric_value):
-                    class_metrics_all[cls_name] = metric_value
-            kitti_eval_metrics['max_recall'] = class_metrics_all
-
-            # Draw Precision-Recall curves
-            fig, axs = plt.subplots(1, 3, figsize=(12, 4), gridspec_kw={'wspace': 0.5})
-            # plt.tight_layout()
-            for c, cls_name in enumerate(['Car', 'Pedestrian', 'Cyclist']):
-                thresholds = kitti_eval_metrics['detailed_stats'][c, 0, ::-1, 4]
-                prec = kitti_eval_metrics['raw_precision'][c, 0, ::-1]
-                rec = kitti_eval_metrics['raw_recall'][c, 0, ::-1]
-                valid_mask = ~((rec == 0) | (prec == 0))
-
-                ax_c = axs[c]
-                ax_c_twin = ax_c.twinx()
-                ax_c.plot(thresholds[valid_mask], prec[valid_mask], 'b-')
-                ax_c_twin.plot(thresholds[valid_mask], rec[valid_mask], 'r-')
-                ax_c.set_title(cls_name)
-                ax_c.set_xlabel('Foreground score')
-                ax_c.set_ylabel('Precision', color='b')
-                ax_c_twin.set_ylabel('Recall', color='r')
-
-            prec_rec_fig = fig.get_figure()
-            kitti_eval_metrics['prec_rec_fig'] = prec_rec_fig
-
-            kitti_eval_metrics.pop('recall')
-            kitti_eval_metrics.pop('precision')
-            kitti_eval_metrics.pop('raw_recall')
-            kitti_eval_metrics.pop('raw_precision')
-            kitti_eval_metrics.pop('detailed_stats')
-
-            final_results.update(kitti_eval_metrics)
-            # TODO(farzad) Does calling reset in compute make a trouble?
-            self.reset()
-
-        for key, val in final_results.items():
-            if isinstance(val, list):
-                final_results[key] = np.nanmean(val)
 
         return final_results
 

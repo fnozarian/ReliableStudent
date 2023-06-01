@@ -159,10 +159,7 @@ MODEL:
     ROI_HEAD:
         NAME: PVRCNNHead
         CLASS_AGNOSTIC: True
-        ENABLE_VIS: False
-        ENABLE_SOFT_TEACHER: False
-        ENABLE_EVAL: True
-        METRICS_PRED_TYPES: [roi_pl_gt, pl_gt_metrics_before_filtering]
+        ENABLE_METRICS: True
         SHARED_FC: [256, 256]
         CLS_FC: [256, 256]
         REG_FC: [256, 256]
@@ -208,8 +205,6 @@ MODEL:
             UNLABELED_REG_FG_THRESH: [0.55, 0.55, 0.55]
 
         LOSS_CONFIG:
-            # suppress FP from UC and FN from BG using 'UL_RCNN_CLS_WEIGHT_TYPE'
-            UL_RCNN_CLS_WEIGHT_TYPE: 'fp-uc-bg' 
             CLS_LOSS: BinaryCrossEntropy
             REG_LOSS: smooth-l1
             CORNER_LOSS_REGULARIZATION: True
