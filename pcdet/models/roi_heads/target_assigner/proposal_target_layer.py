@@ -225,23 +225,14 @@ class ProposalTargetLayer(nn.Module):
         # regression valid mask
         reg_valid_mask = (roi_ious > self.roi_sampler_cfg.REG_FG_THRESH).long()
 
-        # classification label
-        iou_bg_thresh = self.roi_sampler_cfg.CLS_BG_THRESH
-        # NOTE (shashank): Use classwise local thresholds used in unlabeled ROIs for labeled ROIs  
-        if self.roi_sampler_cfg.USE_ULB_CLS_FG_THRESH_FOR_LB :
-            iou_fg_thresh = self.roi_sampler_cfg.UNLABELED_CLS_FG_THRESH
-            iou_fg_thresh = roi_ious.new_tensor(iou_fg_thresh).unsqueeze(0).repeat(len(roi_ious), 1)
-            iou_fg_thresh = torch.gather(iou_fg_thresh, dim=-1, index=(cur_roi_labels[sampled_inds]-1).unsqueeze(-1)).squeeze(-1)
-        else:
-            iou_fg_thresh = self.roi_sampler_cfg.CLS_FG_THRESH
-
-        fg_mask = roi_ious > iou_fg_thresh
-        bg_mask = roi_ious < iou_bg_thresh
+        # classification labels
+        fg_mask = roi_ious > self.roi_sampler_cfg.CLS_FG_THRESH
+        bg_mask = roi_ious < self.roi_sampler_cfg.CLS_BG_THRESH
         interval_mask = (fg_mask == 0) & (bg_mask == 0)
         cls_labels = (fg_mask > 0).float()
-        iou_fg_thresh = iou_fg_thresh[interval_mask] if self.roi_sampler_cfg.USE_ULB_CLS_FG_THRESH_FOR_LB else iou_fg_thresh
         cls_labels[interval_mask] = \
-            (roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
+            (roi_ious[interval_mask] - self.roi_sampler_cfg.CLS_BG_THRESH) \
+                / (self.roi_sampler_cfg.CLS_FG_THRESH - self.roi_sampler_cfg.CLS_BG_THRESH)
 
         return sampled_inds, reg_valid_mask, cls_labels, roi_ious, gt_assignment, interval_mask
 

@@ -161,9 +161,7 @@ MODEL:
         CLASS_AGNOSTIC: True
         ENABLE_VIS: False
         ENABLE_RELIABILITY: False
-        ENABLE_RCNN_CONSISTENCY: False
         ENABLE_SOFT_TEACHER: False
-        ENABLE_ULB_CLS_DIST_LOSS: False
         ENABLE_EVAL: True
         METRICS_PRED_TYPES: [roi_pl_gt, pl_gt_metrics_before_filtering]
         SHARED_FC: [256, 256]
@@ -213,10 +211,6 @@ MODEL:
             UNLABELED_SAMPLE_EASY_BG: True
             UNLABELED_SHARP_RCNN_CLS_LABELS: True
             UNLABELED_USE_CALIBRATED_IOUS: True
-            UNLABELED_TEACHER_SCORES_FOR_RVM: False
-            UNLABELED_INTERVAL_WITH_TEACHER_SCORES: False
-            USE_ULB_CLS_FG_THRESH_FOR_LB: False
-            DISABLE_ST_WEIGHTS: False
 
         LOSS_CONFIG:
             UL_RCNN_CLS_WEIGHT_TYPE: 'interval-only' # two options: `all` or `interval-only`

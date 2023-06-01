@@ -230,84 +230,21 @@ class PVRCNN_SSL(Detector3DTemplate):
                                                                                     override_thresh=0.0,
                                                                                     no_nms_for_unlabeled=self.no_nms)
 
-            # Used for calc stats before and after filtering
             ori_unlabeled_boxes = batch_dict['gt_boxes'][unlabeled_inds, ...]
             if self.model_cfg.ROI_HEAD.get("ENABLE_EVAL", False):
                 # PL metrics before filtering
                 self.update_metrics(batch_dict, pred_dicts_ens, unlabeled_inds, labeled_inds)
 
-            pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var = \
-                self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
-
+            pseudo_boxes, pseudo_scores, _, _, _ = self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
             self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
 
             # apply student's augs on teacher's pseudo-labels (filtered) only (not points)
             batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
 
-            # if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
-            #     for i, uind in enumerate(unlabeled_inds):
-            #         mask = batch_dict['points'][:, 0] == uind
-            #         point = batch_dict['points'][mask, 1:]
-            #         pred_boxes = batch_dict['gt_boxes'][uind][:, :-1]
-            #         pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
-            #         pred_scores = torch.zeros_like(pred_labels).float()
-            #         pred_scores[:pseudo_scores[i].shape[0]] = pseudo_scores[i]
-            #         V.vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1],
-            #             pred_boxes=pred_boxes, pred_scores=pred_scores, pred_labels=pred_labels)
-
-            # ori_unlabeled_boxes_list = [ori_box for ori_box in ori_unlabeled_boxes]
-            # pseudo_boxes_list = [ps_box for ps_box in batch_dict['gt_boxes'][unlabeled_inds]]
-            # metric_inputs = {'preds': pseudo_boxes_list,
-            #                  'targets': ori_unlabeled_boxes_list,
-            #                  'pred_scores': pseudo_scores,
-            #                  'pred_sem_scores': pseudo_sem_scores}
-            # self.metrics['after_filtering'].update(**metric_inputs)  # commented to reduce complexity.
-
             batch_dict['metric_registry'] = self.metric_registry
             batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
             batch_dict['store_scores_in_pkl'] = self.model_cfg.STORE_SCORES_IN_PKL
             for cur_module in self.pv_rcnn.module_list:
-                if cur_module.model_cfg['NAME'] == 'PVRCNNHead' and self.model_cfg['ROI_HEAD'].get('ENABLE_RCNN_CONSISTENCY', False):
-                    # Pass teacher's proposal to the student.
-                    # To let proposal_layer continues for labeled data we pass rois with _ema postfix
-                    batch_dict['rois_ema'] = batch_dict_ema['rois'].detach().clone()
-                    # TODO(farzad) the normalization is done lazily, to be consistent with the other unnormalized roi_scores.
-                    batch_dict['roi_scores_ema'] = batch_dict_ema['roi_scores'].detach().clone()
-                    batch_dict['roi_labels_ema'] = batch_dict_ema['roi_labels'].detach().clone()
-                    batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='rois_ema')
-                    if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
-                        # pseudo-labels used for training roi head
-                        pred_dicts = self.ensemble_post_processing(batch_dict_ema, batch_dict_ema_wa, unlabeled_inds,
-                                                                   ensemble_option='mean_no_nms')
-                    else:
-                        pred_dicts, _ = self.pv_rcnn_ema.post_processing(batch_dict_ema, no_recall_dict=True,
-                                                                         override_thresh=0.0, no_nms_for_unlabeled=True)
-                    boxes, labels, scores, sem_scores, boxes_var, scores_var = self._unpack_predictions(pred_dicts,
-                                                                                                        unlabeled_inds)
-                    pseudo_boxes = [torch.cat([box, label.unsqueeze(-1)], dim=-1) for box, label in zip(boxes, labels)]
-                    self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
-                    batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
-                    batch_dict['pred_scores_ema'] = torch.zeros_like(batch_dict['roi_scores_ema'])
-                    for i, ui in enumerate(unlabeled_inds):
-                        batch_dict['pred_scores_ema'][ui] = scores[i]
-                    # TODO(farzad) ENABLE_RELIABILITY option should not necessarily always have var
-                    if self.model_cfg['ROI_HEAD'].get('ENABLE_RELIABILITY', False):
-                        batch_dict['pred_scores_ema_var'] = torch.zeros_like(batch_dict['roi_scores_ema'])
-                        batch_dict['pred_boxes_ema_var'] = torch.zeros_like(batch_dict['rois_ema'])
-                        for i, ui in enumerate(unlabeled_inds):
-                            batch_dict['pred_scores_ema_var'][ui] = scores_var[i]
-                            batch_dict['pred_boxes_ema_var'][ui] = boxes_var[i]
-
-                    # if self.model_cfg.ROI_HEAD.get('ENABLE_VIS', False):
-                    #     for i, uind in enumerate(unlabeled_inds):
-                    #         mask = batch_dict['points'][:, 0] == uind
-                    #         point = batch_dict['points'][mask, 1:]
-                    #         pred_boxes = batch_dict['gt_boxes'][uind][:, :-1]
-                    #         pred_labels = batch_dict['gt_boxes'][uind][:, -1].int()
-                    #         pred_scores = batch_dict['pred_scores_ema'][uind]
-                    #         V.vis(point, gt_boxes=ori_unlabeled_boxes[i][:, :-1], pred_boxes=pred_boxes,
-                    #             pred_scores=pred_scores, pred_labels=pred_labels)
-
                 batch_dict = cur_module(batch_dict)
 
             # For metrics calculation
@@ -316,7 +253,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             self.pv_rcnn.roi_head.forward_ret_dict['pl_scores'] = pseudo_scores
 
             if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
-                # using teacher to evaluate student's bg/fg proposals through its rcnn head
+                # Using teacher's rcnn to evaluate student's bg/fg proposals
                 with torch.no_grad():
                     batch_dict_std = {}
                     batch_dict_std['unlabeled_inds'] = batch_dict['unlabeled_inds']
@@ -329,21 +266,15 @@ class PVRCNN_SSL(Detector3DTemplate):
                     batch_dict_std['point_coords'] = batch_dict_ema['point_coords'].data.clone()
                     batch_dict_std['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
 
+                    # Reverse augmentations from student proposals before sending to teacher's rcnn head
                     batch_dict_std = self.reverse_augmentation(batch_dict_std, batch_dict, unlabeled_inds)
 
-                    # Perturb Student's ROIs before using them for Teacher's ROI head
-                    if self.model_cfg.ROI_HEAD.ROI_AUG.get('ENABLE', False):
-                        augment_rois = getattr(augmentor_utils, self.model_cfg.ROI_HEAD.ROI_AUG.AUG_TYPE, augmentor_utils.roi_aug_ros)
-                        # rois_before_aug is used only for debugging, can be removed later
-                        batch_dict_std['rois_before_aug'] = batch_dict_std['rois'].clone().detach()
-                        batch_dict_std['rois'][unlabeled_inds] = \
-                            augment_rois(batch_dict_std['rois'][unlabeled_inds], self.model_cfg.ROI_HEAD)
-
+                    # Feed the proposals to teacher's rcnn head
                     self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
                                                       disable_gt_roi_when_pseudo_labeling=True)
                     batch_dict_std = self.apply_augmentation(batch_dict_std, batch_dict, unlabeled_inds, key='batch_box_preds')
 
-                    pred_dicts_std, recall_dicts_std = self.pv_rcnn_ema.post_processing(batch_dict_std,
+                    pred_dicts_std, _ = self.pv_rcnn_ema.post_processing(batch_dict_std,
                                                                                         no_recall_dict=True,
                                                                                         no_nms_for_unlabeled=True)
                     rcnn_cls_score_teacher = -torch.ones_like(self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_labels'])
@@ -358,29 +289,36 @@ class PVRCNN_SSL(Detector3DTemplate):
             disp_dict = {}
             loss_rpn_cls, loss_rpn_box, tb_dict = self.pv_rcnn.dense_head.get_loss(scalar=False)
             loss_point, tb_dict = self.pv_rcnn.point_head.get_loss(tb_dict, scalar=False)
-            loss_rcnn_cls, loss_rcnn_box, ulb_loss_cls_dist, tb_dict = self.pv_rcnn.roi_head.get_loss(tb_dict, scalar=False)
+            loss_rcnn_cls, loss_rcnn_box, tb_dict = self.pv_rcnn.roi_head.get_loss(tb_dict, scalar=False)
 
-            # Use the same reduction method as the baseline model (3diou) by the default
-            reduce_loss = getattr(torch, self.model_cfg.REDUCE_LOSS, 'sum')
+            # Reduce losses across batches using sum reduction or mean reduction (default - "mean")
+            reduce_loss = getattr(torch, self.model_cfg.REDUCE_LOSS, 'mean')
+            
+            # RPN classification loss
             if not self.unlabeled_supervise_cls:
                     loss_rpn_cls = reduce_loss(loss_rpn_cls[labeled_inds, ...])
             else:
                 loss_rpn_cls = reduce_loss(loss_rpn_cls[labeled_inds, ...]) + reduce_loss(loss_rpn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
-
+            # RPN regression loss
             loss_rpn_box = reduce_loss(loss_rpn_box[labeled_inds, ...]) + reduce_loss(loss_rpn_box[unlabeled_inds, ...]) * self.unlabeled_weight
+            
+            # Point classification loss (only for labeled data)
             loss_point = reduce_loss(loss_point[labeled_inds, ...])
+            
+            # RCNN classification loss
             if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False):
                 loss_rcnn_cls = reduce_loss(loss_rcnn_cls[labeled_inds, ...]) + reduce_loss(loss_rcnn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
             else:
                 loss_rcnn_cls = reduce_loss(loss_rcnn_cls[labeled_inds, ...])
+            # RCNN regression loss
             if not self.unlabeled_supervise_refine:
                 loss_rcnn_box = reduce_loss(loss_rcnn_box[labeled_inds, ...])
             else:
                 loss_rcnn_box = reduce_loss(loss_rcnn_box[labeled_inds, ...]) + reduce_loss(loss_rcnn_box[unlabeled_inds, ...]) * self.unlabeled_weight
-            if self.model_cfg['ROI_HEAD'].get('ENABLE_ULB_CLS_DIST_LOSS', False):
-                    loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box + ulb_loss_cls_dist
-            else:
-                loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box
+            
+            # Total loss 
+            loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box
+
             tb_dict_ = {}
             for key in tb_dict.keys():
                 if 'loss' in key:
@@ -397,7 +335,6 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             if self.model_cfg.get('STORE_SCORES_IN_PKL', False) :
                 # Store different types of scores over all itrs and epochs and dump them in a pickle for offline modeling 
-                # TODO (shashank) : Can be optimized later to save computational time, currently takes about 0.002sec
                 batch_roi_labels = self.pv_rcnn.roi_head.forward_ret_dict['roi_labels'][unlabeled_inds]
                 batch_roi_labels = [roi_labels.clone().detach() for roi_labels in batch_roi_labels]
 
@@ -460,6 +397,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 file_path = os.path.join(output_dir, 'scores.pkl')
                 pickle.dump(self.val_dict, open(file_path, 'wb'))
 
+            # Update all the requried metrics 
             for key in self.metric_registry.tags():
                 metrics = self.compute_metrics(tag=key)
                 tb_dict_.update(metrics)
@@ -475,6 +413,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             }
             return ret_dict, tb_dict_, disp_dict
 
+        # Runs evaluation on the validation set
         else:
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
@@ -504,7 +443,6 @@ class PVRCNN_SSL(Detector3DTemplate):
                             for (pseudo_box, pseudo_label) in zip(pseudo_boxes, pseudo_labels)]
 
             # Making consistent # of pseudo boxes in each batch
-            # NOTE: Need to store them in batch_dict in a new key, which can be removed later
             input_dict['pseudo_boxes_prefilter'] = torch.zeros_like(input_dict['gt_boxes'])
             self._fill_with_pseudo_labels(input_dict, pseudo_boxes, unlabeled_inds, labeled_inds,
                                           key='pseudo_boxes_prefilter')
@@ -648,42 +586,12 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             valid_inds = valid_inds & (pseudo_sem_score > sem_conf_thresh.squeeze())
 
-            # TODO(farzad) can this be similarly determined by tag-based stats before and after filtering?
-            # rej_labels = pseudo_label[~valid_inds]
-            # rej_labels_per_class = torch.bincount(rej_labels, minlength=len(self.thresh) + 1)
-            # for class_ind, class_key in enumerate(self.metric_table.metric_record):
-            #     if class_key == 'class_agnostic':
-            #         self.metric_table.metric_record[class_key].metrics['rej_pseudo_lab'].update(
-            #             rej_labels_per_class[1:].sum().item())
-            #     else:
-            #         self.metric_table.metric_record[class_key].metrics['rej_pseudo_lab'].update(
-            #             rej_labels_per_class[class_ind].item())
-
             pseudo_sem_score = pseudo_sem_score[valid_inds]
             pseudo_box = pseudo_box[valid_inds]
             pseudo_label = pseudo_label[valid_inds]
             pseudo_score = pseudo_score[valid_inds]
             pseudo_box_var = pseudo_box_var[valid_inds]
             pseudo_score_var = pseudo_score_var[valid_inds]
-            # TODO : Two stage filtering instead of applying NMS
-            # Stage1 based on size of bbox, Stage2 is objectness thresholding
-            # Note : Two stages happen sequentially, and not independently.
-            # vol_boxes = ((pseudo_box[:, 3] * pseudo_box[:, 4] * pseudo_box[:, 5])/torch.abs(pseudo_box[:,2][0])).view(-1)
-            # vol_boxes, _ = torch.sort(vol_boxes, descending=True)
-            # # Set volume threshold to 10% of the maximum volume of the boxes
-            # keep_ind = int(self.model_cfg.PSEUDO_TWO_STAGE_FILTER.MAX_VOL_PROP * len(vol_boxes))
-            # keep_vol = vol_boxes[keep_ind]
-            # valid_inds = vol_boxes > keep_vol # Stage 1
-            # pseudo_sem_score = pseudo_sem_score[valid_inds]
-            # pseudo_box = pseudo_box[valid_inds]
-            # pseudo_label = pseudo_label[valid_inds]
-            # pseudo_score = pseudo_score[valid_inds]
-
-            # valid_inds = pseudo_score > self.model_cfg.PSEUDO_TWO_STAGE_FILTER.THRESH # Stage 2
-            # pseudo_sem_score = pseudo_sem_score[valid_inds]
-            # pseudo_box = pseudo_box[valid_inds]
-            # pseudo_label = pseudo_label[valid_inds]
-            # pseudo_score = pseudo_score[valid_inds]
 
             pseudo_boxes.append(torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1))
             pseudo_sem_scores.append(pseudo_sem_score)
@@ -773,7 +681,6 @@ class PVRCNN_SSL(Detector3DTemplate):
         # Use the true average until the exponential average is more correct
         alpha = min(1 - 1 / (self.global_step + 1), alpha)
         for ema_param, param in zip(self.pv_rcnn_ema.parameters(), self.pv_rcnn.parameters()):
-            # TODO(farzad) check this
             ema_param.data.mul_(alpha).add_((1 - alpha) * param.data)
         self.accumulated_itr = 0
 
