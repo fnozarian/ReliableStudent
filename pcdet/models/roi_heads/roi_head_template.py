@@ -8,7 +8,6 @@ import torch.nn.functional as F
 from ...utils import box_coder_utils, common_utils, loss_utils
 from ..model_utils.model_nms_utils import class_agnostic_nms
 from .target_assigner.proposal_target_layer import ProposalTargetLayer
-from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 
 from visual_utils import visualize_utils as V
 
@@ -107,75 +106,6 @@ class RoIHeadTemplate(nn.Module):
         batch_dict['has_class_labels'] = True if batch_cls_preds.shape[-1] > 1 else False
         batch_dict.pop('batch_index', None)
         return batch_dict
-
-    def _override_unlabeled_target(self, targets_dict, batch_dict):
-        # merge rois_ema with rois in targets_dict
-        unlabeled_inds = batch_dict['unlabeled_inds']
-        targets_dict['unlabeled_inds'] = unlabeled_inds
-        num_rois = targets_dict['rois'].shape[1]
-        num_rois_ema = batch_dict['rois_ema'].shape[1]
-
-        # TODO(farzad) Expand the targets_dict tensors better/compacter.
-        if num_rois_ema > num_rois:  # Expand targets_dict tensors to hold teacher's rois
-            code_size = targets_dict['rois'].shape[-1]
-            batch_size = batch_dict['batch_size']
-
-            labeled_inds = torch.nonzero(batch_dict['labeled_mask']).squeeze(1).long()
-
-            batch_rois = targets_dict['rois'].new_zeros(batch_size, num_rois_ema, code_size)
-            batch_rois[labeled_inds, :num_rois] = targets_dict['rois'][labeled_inds]
-            targets_dict['rois'] = batch_rois
-
-            batch_gt_of_rois = targets_dict['gt_of_rois'].new_zeros(batch_size, num_rois_ema, code_size + 1)
-            batch_gt_of_rois[labeled_inds, :num_rois] = targets_dict['gt_of_rois'][labeled_inds]
-            targets_dict['gt_of_rois'] = batch_gt_of_rois
-
-            batch_gt_iou_of_rois = targets_dict['gt_iou_of_rois'].new_zeros(batch_size, num_rois_ema)
-            batch_gt_iou_of_rois[labeled_inds, :num_rois] = targets_dict['gt_iou_of_rois'][labeled_inds]
-            targets_dict['gt_iou_of_rois'] = batch_gt_iou_of_rois
-
-            batch_roi_labels = targets_dict['roi_labels'].new_zeros((batch_size, num_rois_ema), dtype=torch.long)
-            batch_roi_labels[labeled_inds, :num_rois] = targets_dict['roi_labels'][labeled_inds]
-            targets_dict['roi_labels'] = batch_roi_labels
-
-            batch_roi_scores = targets_dict['roi_scores'].new_zeros(batch_size, num_rois_ema)
-            batch_roi_scores[labeled_inds, :num_rois] = targets_dict['roi_scores'][labeled_inds]
-            targets_dict['roi_scores'] = batch_roi_scores
-
-            batch_rcnn_cls_labels = -1 * targets_dict['rcnn_cls_labels'].new_ones(batch_size, num_rois_ema)
-            batch_rcnn_cls_labels[labeled_inds, :num_rois] = targets_dict['rcnn_cls_labels'][labeled_inds]
-            targets_dict['rcnn_cls_labels'] = batch_rcnn_cls_labels
-
-            batch_reg_valid_mask = targets_dict['reg_valid_mask'].new_zeros(batch_size, num_rois_ema)
-            batch_reg_valid_mask[labeled_inds, :num_rois] = targets_dict['reg_valid_mask'][labeled_inds]
-            targets_dict['reg_valid_mask'] = batch_reg_valid_mask
-
-            batch_interval_mask = targets_dict['interval_mask'].new_zeros(batch_size, num_rois_ema)
-            batch_interval_mask[labeled_inds, :num_rois] = targets_dict['interval_mask'][labeled_inds]
-            targets_dict['interval_mask'] = batch_interval_mask
-
-
-        targets_dict['rois'][unlabeled_inds, :num_rois_ema] = batch_dict['rois_ema'][unlabeled_inds]
-        # TODO(farzad) WARNING:roi_scores are not normalized for the un/labeled data! Ignored bc it's not used in losses.
-        targets_dict['roi_scores'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_scores_ema'][unlabeled_inds]
-        targets_dict['roi_labels'][unlabeled_inds, :num_rois_ema] = batch_dict['roi_labels_ema'][unlabeled_inds]
-        targets_dict['gt_of_rois'][unlabeled_inds, :num_rois_ema] = batch_dict['gt_boxes'][unlabeled_inds]
-        targets_dict['rcnn_cls_labels'][unlabeled_inds, :num_rois_ema] = batch_dict['pred_scores_ema'][unlabeled_inds]
-        # TODO(farzad) fixed FG threshold.
-        targets_dict['reg_valid_mask'][unlabeled_inds, :num_rois_ema] = torch.ge(batch_dict['pred_scores_ema'][unlabeled_inds], 0.7).long()
-        targets_dict['rcnn_cls_labels'][unlabeled_inds, num_rois_ema:] = -1
-        targets_dict['reg_valid_mask'][unlabeled_inds, num_rois_ema:] = 0
-        targets_dict['gt_iou_of_rois'][unlabeled_inds, :num_rois_ema] = 0
-
-        if 'pred_scores_ema_var' in batch_dict.keys():
-            targets_dict['rcnn_cls_labels_var'] = torch.zeros_like(targets_dict['rcnn_cls_labels'])
-            targets_dict['rcnn_cls_labels_var'][unlabeled_inds, :num_rois_ema] = batch_dict['pred_scores_ema_var'][
-                unlabeled_inds]
-        if 'pred_boxes_ema_var' in batch_dict.keys():
-            targets_dict['gt_of_rois_var'] = torch.zeros_like(targets_dict['gt_of_rois'])
-            # Setting all output dims' var to predicted var except for class label
-            targets_dict['gt_of_rois_var'][unlabeled_inds, :num_rois_ema, :-1] = batch_dict['pred_boxes_ema_var'][
-                unlabeled_inds]
 
     def update_metrics(self, targets_dict, mask_type='cls', vis_type='pred_gt', pred_type=None):
         metric_registry = targets_dict['metric_registry']
@@ -478,111 +408,78 @@ class RoIHeadTemplate(nn.Module):
         }
         return rcnn_loss_cls, tb_dict
 
-    def pre_loss_filtering(self):
-        if self.model_cfg.ENABLE_SOFT_TEACHER:
-            # The soft-teacher is similar to the other methods as it defines the rcnn_cls_labels or its "weights."
-            # Note that it only defines the weights for unlabeled samples. All labeled samples receive one as weight.
-            unlabeled_inds = self.forward_ret_dict['unlabeled_inds']
+    '''
+    Computes reliability based weights using teacher's confidence scores based on student's proposals
+    '''
+    def _get_reliability_weight(self, unlabeled_inds):
+        # Initialize reliability weights with 1s
+        self.forward_ret_dict['rcnn_cls_weights'] = torch.ones_like(self.forward_ret_dict['rcnn_cls_labels'])
+        
+        # Compute the background scores from the teacher based on student proposals
+        rcnn_bg_score_teacher = 1 - self.forward_ret_dict['rcnn_cls_score_teacher']
+        unlabeled_rcnn_cls_weights = self.forward_ret_dict['rcnn_cls_weights'][unlabeled_inds] 
+        
+        ul_interval_mask = self.forward_ret_dict['interval_mask'][unlabeled_inds]
 
-            if self.model_cfg.TARGET_CONFIG.get("UNLABELED_SAMPLER_TYPE", None) == 'subsample_unlabeled_rois_default':
-                gt_iou_of_rois = self.forward_ret_dict['gt_iou_of_rois'][unlabeled_inds].detach().clone()
-                roi_labels = self.forward_ret_dict['roi_labels'][unlabeled_inds].detach().clone() - 1
+        # --------------Use weights for UC region only--------------
+        # suppressing false negatives from UC region
+        if self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fn-uc':
+            unlabeled_rcnn_cls_weights[ul_interval_mask] = rcnn_bg_score_teacher[unlabeled_inds][ul_interval_mask]
+        # suppressing false positives from UC region
+        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fp-uc':           
+            unlabeled_rcnn_cls_weights[ul_interval_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ul_interval_mask]
+        
+        # --------------Use weights for BG region only--------------
+        # suppressing false negatives from BG region
+        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'bg':
+            ulb_bg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 0
+            unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
+        
+        # --------------Use weights for FG region only--------------
+        # suppressing false positives from FG region
+        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg':
+            unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
+        
+        # --------------Use weights for FG and BG region--------------
+        # Use weights as 1s for UC, suppress false positives from FG region and suppress false negatives from BG region
+        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-bg':
+            unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
+            unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
 
-                # ----------- REG_VALID_MASK -----------
-                ulb_reg_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_REG_FG_THRESH
-                ulb_reg_fg_thresh = gt_iou_of_rois.new_tensor(ulb_reg_fg_thresh).reshape(1, 1, -1).repeat(*gt_iou_of_rois.shape[:2], 1)
-                ulb_reg_fg_thresh = torch.gather(ulb_reg_fg_thresh, dim=-1, index=roi_labels.unsqueeze(-1)).squeeze(-1)
-                filtering_mask = gt_iou_of_rois > ulb_reg_fg_thresh
-                self.forward_ret_dict['reg_valid_mask'][unlabeled_inds] = filtering_mask.long()
+        # --------------Use weights for UC and BG regions--------------
+        # Use 1s for FG, suppress false negatives from UC and BG regions
+        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fn-uc-bg':           
+            ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
+            unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
+        # Use 1s for FG mask, suppress false positives from UC, false negatives from BG regions
+        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fp-uc-bg':           
+            unlabeled_rcnn_cls_weights[ul_interval_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ul_interval_mask]
+            ulb_bg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 0
+            unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
 
-                # ----------- RCNN_CLS_LABELS -----------
-                ulb_cls_fg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_CLS_FG_THRESH
-                fg_thresh = gt_iou_of_rois.new_tensor(ulb_cls_fg_thresh).reshape(1, 1, -1).repeat(*gt_iou_of_rois.shape[:2], 1)
-                cls_fg_thresh = torch.gather(fg_thresh, dim=-1, index=roi_labels.unsqueeze(-1)).squeeze(-1)
-                cls_bg_thresh = self.model_cfg.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH
-                
-                ulb_fg_mask = gt_iou_of_rois > cls_fg_thresh
-                ulb_bg_mask = gt_iou_of_rois < cls_bg_thresh
-                ulb_interval_mask = ~(ulb_fg_mask | ulb_bg_mask)
-                ignore_mask = torch.eq(self.forward_ret_dict['gt_of_rois'][unlabeled_inds], 0).all(dim=-1)
-                
-                # Hard labeling for FGs/BGs, soft labeling for UCs
-                gt_iou_of_rois[ignore_mask] = -1
-                gt_iou_of_rois[ulb_fg_mask] = 1.
-                gt_iou_of_rois[ulb_bg_mask] = 0.
-                gt_iou_of_rois[ulb_interval_mask]  = (gt_iou_of_rois[ulb_interval_mask] - cls_bg_thresh) \
-                                                    / (cls_fg_thresh[ulb_interval_mask] - cls_bg_thresh)
+        # --------------Use weights for all regions (FG,BG and UC)--------------
+        # Suppress false positives from FG region, false negatives from BG region and UC region
+        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-fn-uc-bg':           
+            ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
+            unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
+            unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
+        # Suppress false positives from FG and UC region, false negatives from BG region
+        elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-fp-uc-bg':
+            unlabeled_rcnn_cls_weights[~ulb_bg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][~ulb_bg_mask]
+            unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
 
-                self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] = gt_iou_of_rois
-                self.forward_ret_dict['interval_mask'][unlabeled_inds] = ulb_interval_mask
-
-            # Initialize reliability weights with 1s
-            self.forward_ret_dict['rcnn_cls_weights'] = torch.ones_like(self.forward_ret_dict['rcnn_cls_labels'])
+        else:
+            raise ValueError
+        
+        return unlabeled_rcnn_cls_weights
             
-            # Compute the background scores from the teacher based on student proposals
-            rcnn_bg_score_teacher = 1 - self.forward_ret_dict['rcnn_cls_score_teacher']
-            # NOTE: It is only required for unlabeled data
-            unlabeled_rcnn_cls_weights = self.forward_ret_dict['rcnn_cls_weights'][unlabeled_inds] 
-            
-            ul_interval_mask = self.forward_ret_dict['interval_mask'][unlabeled_inds]
-
-            if self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'all':
-                unlabeled_rcnn_cls_weights[ul_interval_mask] = rcnn_bg_score_teacher[unlabeled_inds][ul_interval_mask]
-            # Use Teacher's FG scores instead of BG scores for UCs (its the reverse of "all") 
-            # (assuming, we have more FPs > FNs in UC)
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'rev_uc':           
-                unlabeled_rcnn_cls_weights[ul_interval_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ul_interval_mask]
-            
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'interval-only':
-                unlabeled_rcnn_cls_weights = torch.zeros_like(self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds])
-                unlabeled_rcnn_cls_weights[ul_interval_mask] = rcnn_bg_score_teacher[unlabeled_inds][ul_interval_mask]
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'bg':
-                ulb_bg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 0
-                unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg':
-                unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
-            
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'ignore_interval':  # Naive baseline
-                unlabeled_rcnn_cls_weights[ul_interval_mask] = 0
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'ignore-bg':  # Naive baseline
-                unlabeled_rcnn_cls_weights[ulb_bg_mask] = 0
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'full-ema':
-                unlabeled_rcnn_cls_weights = rcnn_bg_score_teacher[unlabeled_inds]
-            
-            # Use 1s for FG mask, teacher's BG scores for UC+BG mask
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'uc-bg':           
-                ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
-                unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
-            # Use 1s for FG mask, teacher's FG scores for UC mask, teacher's BG scores for BG mask
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'rev_uc-bg':           
-                unlabeled_rcnn_cls_weights[ul_interval_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ul_interval_mask]
-                ulb_bg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 0
-                unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
-
-            # Use teacher's FG scores for FG mask, teacher's BG scores for UC+BG mask
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-uc-bg':           
-                ulb_fg_mask = self.forward_ret_dict['rcnn_cls_labels'][unlabeled_inds] == 1
-                unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
-                unlabeled_rcnn_cls_weights[~ulb_fg_mask] = rcnn_bg_score_teacher[unlabeled_inds][~ulb_fg_mask]
-            # Use teacher's FG scores for FG+UC mask, teacher's BG scores for BG mask
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-rev_uc-bg':
-                unlabeled_rcnn_cls_weights[~ulb_bg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][~ulb_bg_mask]
-                unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
-            
-            # Use 1s for UC, FG scores for FG, BG scores for BG
-            elif self.model_cfg['LOSS_CONFIG']['UL_RCNN_CLS_WEIGHT_TYPE'] == 'fg-bg':
-                unlabeled_rcnn_cls_weights[ulb_fg_mask] = self.forward_ret_dict['rcnn_cls_score_teacher'][unlabeled_inds][ulb_fg_mask]
-                unlabeled_rcnn_cls_weights[ulb_bg_mask] = rcnn_bg_score_teacher[unlabeled_inds][ulb_bg_mask]
-            
-            else:
-                raise ValueError
-
-            self.forward_ret_dict['rcnn_cls_weights'][unlabeled_inds] = unlabeled_rcnn_cls_weights
 
     def get_loss(self, tb_dict=None, scalar=True):
         tb_dict = {} if tb_dict is None else tb_dict
 
-        self.pre_loss_filtering()
+        # Get reliability weights for unlabeled samples 
+        unlabeled_inds = self.forward_ret_dict['unlabeled_inds']
+        self.forward_ret_dict['rcnn_cls_weights'][unlabeled_inds] = self._get_reliability_weight(unlabeled_inds)
 
         if self.model_cfg.get("ENABLE_EVAL", None):
             metrics_pred_types = self.model_cfg.get("METRICS_PRED_TYPES", None)

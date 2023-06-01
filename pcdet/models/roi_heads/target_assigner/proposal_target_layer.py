@@ -115,13 +115,36 @@ class ProposalTargetLayer(nn.Module):
         
         # top-k subsampler
         _, sampled_inds = torch.topk(max_overlaps, k=fg_rois_per_image + bg_rois_per_image)
-
         roi_ious = max_overlaps[sampled_inds]
+        sampled_cur_roi_labels = cur_roi_labels[sampled_inds].detach().clone() - 1
 
-        # interval_mask, reg_valid_mask and cls_labels are defined in pre_loss_filtering based on advanced thresholding.
-        cur_reg_valid_mask = torch.zeros_like(sampled_inds, dtype=torch.int)
+        # ---------- regression valid mask ---------- 
+        # Fetch thresholds for ROIs based on classwise thresholds (currently threshold is set to class-agnostic 0.55)
+        reg_fg_thresh = self.roi_sampler_cfg.UNLABELED_REG_FG_THRESH
+        reg_fg_thresh = roi_ious.new_tensor(reg_fg_thresh).reshape(1, -1).repeat(*roi_ious.shape[:2], 1)
+        reg_fg_thresh = torch.gather(reg_fg_thresh, dim=-1, index=sampled_cur_roi_labels.unsqueeze(-1)).squeeze(-1)
+        cur_reg_valid_mask = (roi_ious > reg_fg_thresh).long()
+
+        # ---------- classification labels ---------- 
+        # Fetch thresholds for ROIs based on classwise thresholds
+        cls_fg_thresh = self.roi_sampler_cfg.UNLABELED_CLS_FG_THRESH
+        fg_thresh = roi_ious.new_tensor(cls_fg_thresh).reshape(1, -1,).repeat(*roi_ious.shape[:2], 1)
+        cls_fg_thresh = torch.gather(fg_thresh, dim=-1, index=sampled_cur_roi_labels.unsqueeze(-1)).squeeze(-1)
+        cls_bg_thresh = self.roi_sampler_cfg.UNLABELED_CLS_BG_THRESH
+        
+        fg_mask = roi_ious > cls_fg_thresh
+        bg_mask = roi_ious < cls_bg_thresh
+        interval_mask = ~(fg_mask | bg_mask)
+        ignore_mask = torch.eq(roi_ious, 0).all(dim=-1)
+
+        # initialize classification labels with -1s (invalid)
         cur_cls_labels = -torch.ones_like(sampled_inds, dtype=torch.float)
-        interval_mask = torch.zeros_like(sampled_inds, dtype=torch.bool)
+        # Hard labeling for FGs/BGs, soft labeling for UCs
+        cur_cls_labels[ignore_mask] = -1
+        cur_cls_labels[fg_mask] = 1.
+        cur_cls_labels[bg_mask] = 0.
+        cur_cls_labels[interval_mask] = (roi_ious[interval_mask] - cls_bg_thresh) \
+                                        / (cls_fg_thresh[interval_mask] - cls_bg_thresh)
 
         return sampled_inds, cur_reg_valid_mask, cur_cls_labels, roi_ious, gt_assignment, interval_mask
 
@@ -142,10 +165,10 @@ class ProposalTargetLayer(nn.Module):
         sampled_inds = self.subsample_rois(max_overlaps=max_overlaps)
         roi_ious = max_overlaps[sampled_inds]
 
-        # regression valid mask
+        # ---------- regression valid mask ----------
         reg_valid_mask = (roi_ious > self.roi_sampler_cfg.REG_FG_THRESH).long()
 
-        # classification labels
+        # ---------- classification labels ----------
         fg_mask = roi_ious > self.roi_sampler_cfg.CLS_FG_THRESH
         bg_mask = roi_ious < self.roi_sampler_cfg.CLS_BG_THRESH
         interval_mask = (fg_mask == 0) & (bg_mask == 0)
