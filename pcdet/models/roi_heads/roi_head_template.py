@@ -280,21 +280,10 @@ class RoIHeadTemplate(nn.Module):
         roi_boxes3d = forward_ret_dict['rois']
         rcnn_batch_size = gt_boxes3d_ct.view(-1, code_size).shape[0]
 
-        if 'gt_of_rois_var' in forward_ret_dict.keys() and loss_cfgs.get('USE_BOX_REG_VAR', False):
-            gt_of_rois_var = forward_ret_dict['gt_of_rois_var'][..., 0:code_size]
-            box_var = gt_of_rois_var.view_as(rcnn_reg)
-            box_var = torch.clamp(box_var, min=1e-6, max=1)
-        else:
-            box_var = torch.ones_like(rcnn_reg)
-
         batch_size = forward_ret_dict['reg_valid_mask'].shape[0]
 
         fg_mask = (reg_valid_mask > 0)
         fg_sum = fg_mask.long().sum().item()
-        # if scalar:
-        #     fg_sum = fg_mask.long().sum().item()
-        # else:
-        #     fg_sum = fg_mask.reshape(batch_size, -1).long().sum(-1)
 
         tb_dict = {}
 
@@ -316,8 +305,7 @@ class RoIHeadTemplate(nn.Module):
             else:
                 fg_sum_ = fg_mask.reshape(batch_size, -1).long().sum(-1)
                 rcnn_loss_reg = (rcnn_loss_reg.view(rcnn_batch_size, -1) *
-                                 fg_mask.unsqueeze(dim=-1).float() *
-                                 (1 / box_var)).reshape(batch_size, -1).sum(-1) / torch.clamp(fg_sum_.float(), min=1.0)
+                                 fg_mask.unsqueeze(dim=-1).float()).reshape(batch_size, -1).sum(-1) / torch.clamp(fg_sum_.float(), min=1.0)
             rcnn_loss_reg = rcnn_loss_reg * loss_cfgs.LOSS_WEIGHTS['rcnn_reg_weight']
             tb_dict['rcnn_loss_reg'] = rcnn_loss_reg.item() if scalar else rcnn_loss_reg
 

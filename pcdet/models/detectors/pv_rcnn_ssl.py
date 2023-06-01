@@ -79,7 +79,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     batch_dict_ema[k] = batch_dict[k]
 
-            # forward pass of teacher model with gradients disabled
+            # ------ forward pass of teacher model with gradients disabled ------
             with torch.no_grad():
                 for cur_module in self.pv_rcnn_ema.module_list:
                     try:
@@ -98,7 +98,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 self.update_metrics(batch_dict, pred_dicts_ens, unlabeled_inds, labeled_inds)
 
             # Use teacher's predictions as pseudo labels - Filter them and then fill in the batch_dict
-            pseudo_boxes, pseudo_scores, _, _, _ = self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
+            pseudo_boxes, pseudo_scores, _ = self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
             self._fill_with_pseudo_labels(batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds)
 
             # apply student's augs on teacher's pseudo-labels (filtered) only (not points)
@@ -106,9 +106,8 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             batch_dict['metric_registry'] = self.metric_registry
             batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
-            batch_dict['store_scores_in_pkl'] = self.model_cfg.STORE_SCORES_IN_PKL
             
-            # forward pass of student model
+            # ------ forward pass of student model ------
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
 
@@ -117,71 +116,66 @@ class PVRCNN_SSL(Detector3DTemplate):
             self.pv_rcnn.roi_head.forward_ret_dict['pl_boxes'] = batch_dict['gt_boxes']
             self.pv_rcnn.roi_head.forward_ret_dict['pl_scores'] = pseudo_scores
 
-            if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False):
-                # Using teacher's rcnn to evaluate student's bg/fg proposals
-                with torch.no_grad():
-                    batch_dict_std = {}
-                    batch_dict_std['unlabeled_inds'] = batch_dict['unlabeled_inds']
-                    batch_dict_std['rois'] = batch_dict['rois'].data.clone()
-                    batch_dict_std['roi_scores'] = batch_dict['roi_scores'].data.clone()
-                    batch_dict_std['roi_labels'] = batch_dict['roi_labels'].data.clone()
-                    batch_dict_std['has_class_labels'] = batch_dict['has_class_labels']
-                    batch_dict_std['batch_size'] = batch_dict['batch_size']
-                    batch_dict_std['point_features'] = batch_dict_ema['point_features'].data.clone()
-                    batch_dict_std['point_coords'] = batch_dict_ema['point_coords'].data.clone()
-                    batch_dict_std['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
+            # ------ Use teacher's rcnn to evaluate student's bg/fg proposals ------ 
+            with torch.no_grad():
+                batch_dict_std = {}
+                batch_dict_std['unlabeled_inds'] = batch_dict['unlabeled_inds']
+                batch_dict_std['rois'] = batch_dict['rois'].data.clone()
+                batch_dict_std['roi_scores'] = batch_dict['roi_scores'].data.clone()
+                batch_dict_std['roi_labels'] = batch_dict['roi_labels'].data.clone()
+                batch_dict_std['has_class_labels'] = batch_dict['has_class_labels']
+                batch_dict_std['batch_size'] = batch_dict['batch_size']
+                batch_dict_std['point_features'] = batch_dict_ema['point_features'].data.clone()
+                batch_dict_std['point_coords'] = batch_dict_ema['point_coords'].data.clone()
+                batch_dict_std['point_cls_scores'] = batch_dict_ema['point_cls_scores'].data.clone()
 
-                    # Reverse augmentations from student proposals before sending to teacher's rcnn head
-                    batch_dict_std = self.reverse_augmentation(batch_dict_std, batch_dict, unlabeled_inds)
+                # Reverse augmentations from student proposals before sending to teacher's rcnn head
+                batch_dict_std = self.reverse_augmentation(batch_dict_std, batch_dict, unlabeled_inds)
 
-                    # Feed the proposals to teacher's rcnn head
-                    self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
-                                                      disable_gt_roi_when_pseudo_labeling=True)
-                    batch_dict_std = self.apply_augmentation(batch_dict_std, batch_dict, unlabeled_inds, key='batch_box_preds')
+                # Feed student proposals to teacher's rcnn head
+                self.pv_rcnn_ema.roi_head.forward(batch_dict_std,
+                                                    disable_gt_roi_when_pseudo_labeling=True)
+                
+                batch_dict_std = self.apply_augmentation(batch_dict_std, batch_dict, unlabeled_inds, key='batch_box_preds')
 
-                    pred_dicts_std, _ = self.pv_rcnn_ema.post_processing(batch_dict_std,
-                                                                        no_recall_dict=True,
-                                                                        no_nms_for_unlabeled=True)
-                    rcnn_cls_score_teacher = -torch.ones_like(self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_labels'])
-                    batch_box_preds_teacher = torch.zeros_like(self.pv_rcnn.roi_head.forward_ret_dict['batch_box_preds'])
-                    
-                    # Fetch teacher's refined predictions on student's proposals (unlabeled data) 
-                    for uind in unlabeled_inds:
-                        rcnn_cls_score_teacher[uind] = pred_dicts_std[uind]['pred_scores']
-                        batch_box_preds_teacher[uind] = pred_dicts_std[uind]['pred_boxes']
-                    self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = rcnn_cls_score_teacher
-                    self.pv_rcnn.roi_head.forward_ret_dict['batch_box_preds_teacher'] = batch_box_preds_teacher     # For metrics
+                pred_dicts_std, _ = self.pv_rcnn_ema.post_processing(batch_dict_std,
+                                                                    no_recall_dict=True,
+                                                                    no_nms_for_unlabeled=True)
+                rcnn_cls_score_teacher = -torch.ones_like(self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_labels'])
+                batch_box_preds_teacher = torch.zeros_like(self.pv_rcnn.roi_head.forward_ret_dict['batch_box_preds'])
+                
+                # Fetch teacher's refined predictions on student's proposals (unlabeled data) 
+                for uind in unlabeled_inds:
+                    rcnn_cls_score_teacher[uind] = pred_dicts_std[uind]['pred_scores']
+                    batch_box_preds_teacher[uind] = pred_dicts_std[uind]['pred_boxes']
+                self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = rcnn_cls_score_teacher
+                self.pv_rcnn.roi_head.forward_ret_dict['batch_box_preds_teacher'] = batch_box_preds_teacher     # For metrics
 
             # Compute losses
             disp_dict = {}
             loss_rpn_cls, loss_rpn_box, tb_dict = self.pv_rcnn.dense_head.get_loss(scalar=False)
             loss_point, tb_dict = self.pv_rcnn.point_head.get_loss(tb_dict, scalar=False)
             loss_rcnn_cls, loss_rcnn_box, tb_dict = self.pv_rcnn.roi_head.get_loss(tb_dict, scalar=False)
-
-            # Reduce losses across batches using sum reduction or mean reduction (default - "mean")
-            reduce_loss = getattr(torch, self.model_cfg.REDUCE_LOSS, 'mean')
             
             # RPN classification loss
             if not self.unlabeled_supervise_cls:
-                    loss_rpn_cls = reduce_loss(loss_rpn_cls[labeled_inds, ...])
+                    loss_rpn_cls = torch.mean(loss_rpn_cls[labeled_inds, ...])
             else:
-                loss_rpn_cls = reduce_loss(loss_rpn_cls[labeled_inds, ...]) + reduce_loss(loss_rpn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
+                loss_rpn_cls = torch.mean(loss_rpn_cls[labeled_inds, ...]) + torch.mean(loss_rpn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
             # RPN regression loss
-            loss_rpn_box = reduce_loss(loss_rpn_box[labeled_inds, ...]) + reduce_loss(loss_rpn_box[unlabeled_inds, ...]) * self.unlabeled_weight
+            loss_rpn_box = torch.mean(loss_rpn_box[labeled_inds, ...]) + torch.mean(loss_rpn_box[unlabeled_inds, ...]) * self.unlabeled_weight
             
             # Point classification loss (only for labeled data)
-            loss_point = reduce_loss(loss_point[labeled_inds, ...])
+            loss_point = torch.mean(loss_point[labeled_inds, ...])
             
             # RCNN classification loss
-            if self.model_cfg['ROI_HEAD'].get('ENABLE_SOFT_TEACHER', False) or self.model_cfg.get('UNLABELED_SUPERVISE_OBJ', False):
-                loss_rcnn_cls = reduce_loss(loss_rcnn_cls[labeled_inds, ...]) + reduce_loss(loss_rcnn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
-            else:
-                loss_rcnn_cls = reduce_loss(loss_rcnn_cls[labeled_inds, ...])
+            loss_rcnn_cls = torch.mean(loss_rcnn_cls[labeled_inds, ...]) + torch.mean(loss_rcnn_cls[unlabeled_inds, ...]) * self.unlabeled_weight
+
             # RCNN regression loss
             if not self.unlabeled_supervise_refine:
-                loss_rcnn_box = reduce_loss(loss_rcnn_box[labeled_inds, ...])
+                loss_rcnn_box = torch.mean(loss_rcnn_box[labeled_inds, ...])
             else:
-                loss_rcnn_box = reduce_loss(loss_rcnn_box[labeled_inds, ...]) + reduce_loss(loss_rcnn_box[unlabeled_inds, ...]) * self.unlabeled_weight
+                loss_rcnn_box = torch.mean(loss_rcnn_box[labeled_inds, ...]) + torch.mean(loss_rcnn_box[unlabeled_inds, ...]) * self.unlabeled_weight
             
             # Total loss 
             loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box
@@ -189,14 +183,14 @@ class PVRCNN_SSL(Detector3DTemplate):
             tb_dict_ = {}
             for key in tb_dict.keys():
                 if 'loss' in key:
-                    tb_dict_[key+"_labeled"] = reduce_loss(tb_dict[key][labeled_inds, ...])
-                    tb_dict_[key + "_unlabeled"] = reduce_loss(tb_dict[key][unlabeled_inds, ...])
+                    tb_dict_[key+"_labeled"] = torch.mean(tb_dict[key][labeled_inds, ...])
+                    tb_dict_[key + "_unlabeled"] = torch.mean(tb_dict[key][unlabeled_inds, ...])
                 elif 'acc' in key:
-                    tb_dict_[key+"_labeled"] = reduce_loss(tb_dict[key][labeled_inds, ...])
-                    tb_dict_[key + "_unlabeled"] = reduce_loss(tb_dict[key][unlabeled_inds, ...])
+                    tb_dict_[key+"_labeled"] = torch.mean(tb_dict[key][labeled_inds, ...])
+                    tb_dict_[key + "_unlabeled"] = torch.mean(tb_dict[key][unlabeled_inds, ...])
                 elif 'point_pos_num' in key:
-                    tb_dict_[key + "_labeled"] = reduce_loss(tb_dict[key][labeled_inds, ...])
-                    tb_dict_[key + "_unlabeled"] = reduce_loss(tb_dict[key][unlabeled_inds, ...])
+                    tb_dict_[key + "_labeled"] = torch.mean(tb_dict[key][labeled_inds, ...])
+                    tb_dict_[key + "_unlabeled"] = torch.mean(tb_dict[key][unlabeled_inds, ...])
                 else:
                     tb_dict_[key] = tb_dict[key]
 
@@ -240,7 +234,7 @@ class PVRCNN_SSL(Detector3DTemplate):
         Recording PL vs GT statistics BEFORE filtering
         """
         if 'pl_gt_metrics_before_filtering' in self.model_cfg.ROI_HEAD.METRICS_PRED_TYPES:
-            pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores, _, _ = self._unpack_predictions(
+            pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores = self._unpack_predictions(
                 pred_dict, unlabeled_inds)
             pseudo_boxes = [torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1) \
                             for (pseudo_box, pseudo_label) in zip(pseudo_boxes, pseudo_labels)]
@@ -270,7 +264,6 @@ class PVRCNN_SSL(Detector3DTemplate):
 
         return metrics
 
-    # TODO(farzad) refactor and remove this!
     def _unpack_predictions(self, pred_dicts, unlabeled_inds):
         pseudo_boxes = []
         pseudo_scores = []
@@ -283,13 +276,6 @@ class PVRCNN_SSL(Detector3DTemplate):
             pseudo_box = pred_dicts[ind]['pred_boxes']
             pseudo_label = pred_dicts[ind]['pred_labels']
             pseudo_sem_score = pred_dicts[ind]['pred_sem_scores']
-            # TODO(farzad) REFACTOR LATER!
-            pseudo_box_var = -1 * torch.ones_like(pseudo_box)
-            if "pred_boxes_var" in pred_dicts[ind].keys():
-                pseudo_box_var = pred_dicts[ind]['pred_boxes_var']
-            pseudo_score_var = -1 * torch.ones_like(pseudo_score)
-            if "pred_scores_var" in pred_dicts[ind].keys():
-                pseudo_score_var = pred_dicts[ind]['pred_scores_var']
             if len(pseudo_label) == 0:
                 pseudo_boxes.append(pseudo_label.new_zeros((1, 7)).float())
                 pseudo_boxes_var.append(pseudo_label.new_zeros((1, 7)).float())
@@ -300,35 +286,29 @@ class PVRCNN_SSL(Detector3DTemplate):
                 continue
 
             pseudo_boxes.append(pseudo_box)
-            pseudo_boxes_var.append(pseudo_box_var)
             pseudo_sem_scores.append(pseudo_sem_score)
             pseudo_scores.append(pseudo_score)
-            pseudo_scores_var.append(pseudo_score_var)
             pseudo_labels.append(pseudo_label)
 
-        return pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var
+        return pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores
 
-    # TODO(farzad) refactor and remove this!
     def _filter_pseudo_labels(self, pred_dicts, unlabeled_inds):
         pseudo_boxes = []
         pseudo_scores = []
         pseudo_sem_scores = []
-        pseudo_scores_var = []
-        pseudo_boxes_var = []
-        for pseudo_box, pseudo_label, pseudo_score, pseudo_sem_score, pseudo_box_var, pseudo_score_var in zip(
+        for pseudo_box, pseudo_label, pseudo_score, pseudo_sem_score in zip(
                 *self._unpack_predictions(pred_dicts, unlabeled_inds)):
 
             if pseudo_label[0] == 0:
                 pseudo_boxes.append(torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1))
                 pseudo_sem_scores.append(pseudo_sem_score)
                 pseudo_scores.append(pseudo_score)
-                pseudo_scores_var.append(pseudo_score_var)
-                pseudo_boxes_var.append(pseudo_box_var)
                 continue
 
             conf_thresh = torch.tensor(self.thresh, device=pseudo_label.device).unsqueeze(
                 0).repeat(len(pseudo_label), 1).gather(dim=1, index=(pseudo_label - 1).unsqueeze(-1))
 
+            # This can be removed as the semantic thresholds are set to 0 in Reliable Student
             sem_conf_thresh = torch.tensor(self.sem_thresh, device=pseudo_label.device).unsqueeze(
                 0).repeat(len(pseudo_label), 1).gather(dim=1, index=(pseudo_label - 1).unsqueeze(-1))
 
@@ -340,16 +320,12 @@ class PVRCNN_SSL(Detector3DTemplate):
             pseudo_box = pseudo_box[valid_inds]
             pseudo_label = pseudo_label[valid_inds]
             pseudo_score = pseudo_score[valid_inds]
-            pseudo_box_var = pseudo_box_var[valid_inds]
-            pseudo_score_var = pseudo_score_var[valid_inds]
 
             pseudo_boxes.append(torch.cat([pseudo_box, pseudo_label.view(-1, 1).float()], dim=1))
             pseudo_sem_scores.append(pseudo_sem_score)
             pseudo_scores.append(pseudo_score)
-            pseudo_scores_var.append(pseudo_score_var)
-            pseudo_boxes_var.append(pseudo_box_var)
 
-        return pseudo_boxes, pseudo_scores, pseudo_sem_scores, pseudo_boxes_var, pseudo_scores_var
+        return pseudo_boxes, pseudo_scores, pseudo_sem_scores
 
     def _fill_with_pseudo_labels(self, batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds, key=None):
         key = 'gt_boxes' if key is None else key

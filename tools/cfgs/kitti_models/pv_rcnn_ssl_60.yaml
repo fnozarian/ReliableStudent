@@ -208,8 +208,8 @@ MODEL:
             UNLABELED_REG_FG_THRESH: [0.55, 0.55, 0.55]
 
         LOSS_CONFIG:
-            UL_RCNN_CLS_WEIGHT_TYPE: 'interval-only' # two options: `all` or `interval-only`
-            USE_BOX_REG_VAR: False
+            # suppress FP from UC and FN from BG using 'UL_RCNN_CLS_WEIGHT_TYPE'
+            UL_RCNN_CLS_WEIGHT_TYPE: 'fp-uc-bg' 
             CLS_LOSS: BinaryCrossEntropy
             REG_LOSS: smooth-l1
             CORNER_LOSS_REGULARIZATION: True
@@ -220,16 +220,6 @@ MODEL:
                 'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
                 ulb_cls_dist_weight: 0.2
             }
-        
-        ROI_AUG:
-            ENABLE: False
-            AUG_TYPE: roi_aug_ros
-            ROS:
-                SCALE_RANGE: [0.9, 1.1]
-                ROTATE_RANGE: [0, 0] 
-                SAME_SCALE_XYZ: True
-            TRANSLATE:
-                SCALE: [0.25, 0.25, 0.25]
 
 
     POST_PROCESSING:
@@ -238,8 +228,8 @@ MODEL:
         OUTPUT_RAW_SCORE: False
 
         EVAL_METRIC: kitti
-        ENABLE_KITTI_EVAL: True
-        TEST_EVAL_DURING_TRAIN: True
+        ENABLE_KITTI_EVAL: False
+        TEST_EVAL_DURING_TRAIN: False
         NMS_CONFIG:
             MULTI_CLASSES_NMS: False
             NMS_TYPE: nms_gpu
@@ -247,18 +237,15 @@ MODEL:
             NMS_PRE_MAXSIZE: 4096
             NMS_POST_MAXSIZE: 500
 
-    THRESH: [0.8, 0.4, 0.4]
+    THRESH: [0.95, 0.85, 0.85]
     UNLABELED_SUPERVISE_CLS: True
-    UNLABELED_SUPERVISE_OBJ: False
     UNLABELED_SUPERVISE_REFINE: True
     UNLABELED_WEIGHT: 1.0
-    SEM_THRESH: [0.2, 0.0, 0.0]
+    SEM_THRESH: [0.0, 0.0, 0.0]
     SUPERVISE_MODE: 0
     NO_NMS: False
     EMA_ALPHA: 0.999
     EMA_UPDATE_INTERVAL: 1 
-    REDUCE_LOSS: 'mean'
-    STORE_SCORES_IN_PKL: False
 
 
 OPTIMIZATION:
