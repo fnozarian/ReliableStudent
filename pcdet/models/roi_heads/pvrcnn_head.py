@@ -157,8 +157,6 @@ class PVRCNNHead(RoIHeadTemplate):
             # Temporarily add infos to targets_dict for metrics
             targets_dict['unlabeled_inds'] = batch_dict['unlabeled_inds']
             targets_dict['ori_unlabeled_boxes'] = batch_dict['ori_unlabeled_boxes']
-            # TODO(farzad) refactor this with global registry,
-            #  accessible in different places, not via passing through batch_dict
             targets_dict['metric_registry'] = batch_dict['metric_registry']
 
         # RoI aware pooling

@@ -1,9 +1,3 @@
-# arguments example:
-# --pred_infos
-# <OpenPCDet_HOME>/output/cfgs/kitti_models/pv_rcnn_ssl/enabled_st_all_bs8_dist4_split_1_2_trial3_169035d/eval/eval_with_train/epoch_60/val/result.pkl
-# --gt_infos
-# <OpenPCDet_HOME>/data/kitti/kitti_infos_val.pkl
-
 import argparse
 import pickle
 
@@ -13,45 +7,65 @@ import numpy as np
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 import math
 from pcdet.config import cfg
-from matplotlib import pyplot as plt
-import torch.nn.functional as F
 
+'''
+This class is used to compute the quality metrics for the predictions.
+In the default code, it is used to compute the quality metrics based on the RCNN classification predictions.
+But it is also possible to use it to compute the quality metrics based on other type of predictions.
 
+Set 'ENABLE_METRICS = True' in pv_rcnn_ssl_60.yaml to compute these metrics.
+
+This class is derived from the 'Metric' class of 'torchmetrics'.
+(See https://torchmetrics.readthedocs.io/en/latest/ for more details) 
+'''
 class PredQualityMetrics(Metric):
     full_state_update: bool = False
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.reset_state_interval = kwargs.get('reset_state_interval', 2)
+        # Frequency to compute the metrics based on number of sampels seen so far.
+        self.reset_state_interval = kwargs.get('reset_state_interval', 64)
         self.tag = kwargs.get('tag', None)
         self.dataset = kwargs.get('dataset', None)
         self.config = kwargs.get('config', None)
-        # We use _fg, _bg and _uc if a pred is fg, bg or uc wrt ground truth, respectively.
-        # We use _tp if a pred is fg wrt gt and fg wrt pl.
-        # We use _fn if a pred is fg wrt gt and not fg wrt pl.
-        # We use _fp if a pred is not fg wrt gt and fg wrt pl.
+        
+        ''' 
+        List of metric names to be computed.
+        If needed, add new metrics here and also add the corresponding computation in the 'update' method.
+        We use :
+        -- _fg, _bg and _uc if a pred is fg, bg or uc wrt ground truth, respectively.
+        -- _tp if a pred is fg wrt gt and fg wrt pl.
+        -- _fn if a pred is fg wrt gt and not fg wrt pl.
+        -- _fp if a pred is not fg wrt gt and fg wrt pl.
+        '''
         self.metrics_name = ["pred_ious", "pred_fgs", "sem_score_fgs", "sem_score_bgs", "score_fgs", "pred_ious_bgs",
                              "score_bgs", "target_score_bg", "num_pred_boxes", "num_gt_boxes", "pred_weight_fg",
                              "pred_weight_bg", "pred_ucs", "pred_ious_ucs", "score_ucs", "sem_score_ucs", "target_score_uc",
                              "pred_weight_uc", "pred_fn_rate", "pred_tp_rate", "pred_fp_ratio", "pred_ious_wrt_pl_fg",
-                             "pred_ious_wrt_pl_fn", "pred_ious_wrt_pl_fp", "pred_ious_wrt_pl_tp", "score_fgs_tp",
-                             "score_fgs_fn", "score_fgs_fp", "target_score_fn", "target_score_tp", "target_score_fp",
-                             "pred_weight_fn", "pred_weight_tp", "pred_weight_fp"]
-                             
+                             "pred_ious_wrt_pl_fn", "pred_ious_wrt_pl_fp", "pred_ious_wrt_pl_tp"]
+
+        # Thresholds adapted from official KITTI evaluation code      
         self.min_overlaps = np.array([0.7, 0.5, 0.5, 0.7, 0.5, 0.7])
-        self.class_agnostic_fg_thresh = 0.7
+        
+        # Initalize each metric as a state for 'torchmetrics'
         for metric_name in self.metrics_name:
             self.add_state(metric_name, default=[], dist_reduce_fx='cat')
 
+    '''
+    Updates the state of each metric 
+    This function is called before the loss computation for every iteration.
+    '''
     def update(self, preds: [torch.Tensor], ground_truths: [torch.Tensor], pred_scores: [torch.Tensor],
                roi_scores=None, target_scores=None, pred_weights=None, pseudo_labels=None, pred_iou_wrt_pl=None) -> None:
         
+        # Check input types and dimensions
         assert isinstance(preds, list) and isinstance(ground_truths, list) and isinstance(pred_scores, list)
         assert all([pred.dim() == 2 for pred in preds]) and all([pred.dim() == 2 for pred in ground_truths]) and all([pred.dim() == 1 for pred in pred_scores])
         assert all([pred.shape[-1] == 8 for pred in preds]) and all([gt.shape[-1] == 8 for gt in ground_truths])
         if roi_scores is not None:
             assert len(pred_scores) == len(roi_scores)
 
+        # Convert tensors to lsit of tensors 
         roi_scores = [score.clone().detach() for score in roi_scores] if roi_scores is not None else None
         preds = [pred_box.clone().detach() for pred_box in preds]
         pred_scores = [ps_score.clone().detach() for ps_score in pred_scores]
@@ -63,10 +77,13 @@ class PredQualityMetrics(Metric):
 
         sample_tensor = preds[0] if len(preds) else ground_truths[0]
         num_classes = len(self.dataset.class_names)
+
+        # Iterate over each input scene
         for i in range(len(preds)):
             valid_preds_mask = torch.logical_not(torch.all(preds[i] == 0, dim=-1))
             valid_pred_boxes = preds[i][valid_preds_mask]
 
+            # Fetch the predictions for each input scene
             valid_pred_scores = pred_scores[i][valid_preds_mask.nonzero().view(-1)]
             valid_roi_scores = roi_scores[i][valid_preds_mask.nonzero().view(-1)] if roi_scores else None
             valid_target_scores = target_scores[i][valid_preds_mask.nonzero().view(-1)] if target_scores else None
@@ -74,6 +91,7 @@ class PredQualityMetrics(Metric):
             valid_pred_iou_wrt_pl = pred_iou_wrt_pl[i][valid_preds_mask.nonzero().view(-1)].squeeze() if pred_iou_wrt_pl else None
             valid_gts_mask = torch.logical_not(torch.all(ground_truths[i] == 0, dim=-1))
             valid_gt_boxes = ground_truths[i][valid_gts_mask]
+            
             if pseudo_labels is not None:
                 valid_pl_mask = torch.logical_not(torch.all(pseudo_labels[i] == 0, dim=-1))
                 valid_pl_boxes = pseudo_labels[i][valid_pl_mask] if pseudo_labels else None
@@ -83,50 +101,63 @@ class PredQualityMetrics(Metric):
             valid_pred_boxes[:, -1] -= 1
             valid_gt_boxes[:, -1] -= 1
 
-            # Adding predicted scores as the last column
+            # Adding predicted scores (student's preds) as the last column
             valid_pred_boxes = torch.cat([valid_pred_boxes, valid_pred_scores.unsqueeze(dim=-1)], dim=-1)
-
             pred_labels = valid_pred_boxes[:, -2]
 
             num_gts = valid_gts_mask.sum()
             num_preds = valid_preds_mask.sum()
 
+            # This holds all the metrics in class-wise fashion
             classwise_metrics = {}
+            # Initialize all the metrics with 0
             for metric_name in self.metrics_name:
                 classwise_metrics[metric_name] = sample_tensor.new_zeros(num_classes + 1).fill_(float('nan'))
 
+            # Loop over each class to compute its metrics
             for cind in range(num_classes):
+                # Get mask for class
                 pred_cls_mask = pred_labels == cind
                 gt_cls_mask = valid_gt_boxes[:, -1] == cind
+
+                # Number of predictions and gt boxes for this class
                 classwise_metrics['num_pred_boxes'][cind] = pred_cls_mask.sum()
                 classwise_metrics['num_gt_boxes'][cind] = gt_cls_mask.sum()
 
+                # Metrics computaiton only possible if there are predictions and gt boxes for this class
                 if num_gts > 0 and num_preds > 0:
                     overlap = iou3d_nms_utils.boxes_iou3d_gpu(valid_pred_boxes[:, 0:7], valid_gt_boxes[:, 0:7])
                     preds_iou_max, assigned_gt_inds = overlap.max(dim=1)
 
+                    # Get mask for assigned GTs belonging to this class
                     assigned_gt_cls_mask = valid_gt_boxes[assigned_gt_inds, -1] == cind
+                    # Mask for assigned GTs belonging to this class and preds belonging to this class i.e. correctly classified mask
+                    cc_mask = (pred_cls_mask & assigned_gt_cls_mask)  
 
-                    cc_mask = (pred_cls_mask & assigned_gt_cls_mask)  # correctly classified mask
-
-                    # Using kitti test class-wise fg threshold instead of thresholds used during train.
+                    # Using kitti test class-wise fg threshold for analysis i.e. 0.7,0.5,0.5 for Car,Ped,Cyc
                     classwise_fg_thresh = self.min_overlaps[cind]
                     fg_mask = preds_iou_max >= classwise_fg_thresh
                     bg_mask = preds_iou_max <= self.config.ROI_HEAD.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH
                     uc_mask = ~(bg_mask | fg_mask)  # uncertain mask
 
+                    # Metrics for samples which are FG wrt GTs
                     cc_fg_mask = fg_mask & cc_mask
+                    # Number of samples which are FG wrt GTs
                     classwise_metrics['pred_fgs'][cind] = (cc_fg_mask).sum() / cc_mask.sum()
+                    # IoU of samples which are FG wrt GTs
                     classwise_metrics['pred_ious'][cind] = (preds_iou_max * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
+                    # Conidence score of samples which are FG wrt GTs
                     cls_score_fg = (valid_pred_scores * cc_fg_mask.float()).sum() / (cc_fg_mask).sum()
                     classwise_metrics['score_fgs'][cind] = cls_score_fg
 
+                    # Metrics for samples which are UC (uncertain region) wrt GTs
                     cc_uc_mask = uc_mask & cc_mask
                     classwise_metrics['pred_ucs'][cind] = (cc_uc_mask).sum() / cc_mask.sum()
                     classwise_metrics['pred_ious_ucs'][cind] = (preds_iou_max * cc_uc_mask.float()).sum() / cc_uc_mask.sum()
                     cls_score_uc = (valid_pred_scores * cc_uc_mask.float()).sum() / (cc_uc_mask).sum()
                     classwise_metrics['score_ucs'][cind] = cls_score_uc
 
+                    # Metrics for samples which are BG wrt GTs
                     cls_bg_mask = pred_cls_mask & bg_mask
                     classwise_metrics['pred_ious_bgs'][cind] = (preds_iou_max * cls_bg_mask.float()).sum() / cls_bg_mask.sum()
                     cls_score_bg = (valid_pred_scores * cls_bg_mask.float()).sum() / torch.clamp(bg_mask.float().sum(), min=1.0)
@@ -148,6 +179,7 @@ class PredQualityMetrics(Metric):
                         cls_target_score_uc = (valid_target_scores * cc_uc_mask.float()).sum() / cc_uc_mask.float().sum()
                         classwise_metrics['target_score_uc'][cind] = cls_target_score_uc
 
+                    # Reliability weights assigned to proposals which are FG, UC, BG wrt GTs
                     if valid_pred_weights is not None:
                         cls_pred_weight_bg = (valid_pred_weights * cls_bg_mask.float()).sum() / cls_bg_mask.float().sum()
                         classwise_metrics['pred_weight_bg'][cind] = cls_pred_weight_bg
@@ -157,48 +189,38 @@ class PredQualityMetrics(Metric):
                         classwise_metrics['pred_weight_fg'][cind] = cls_pred_weight_fg
 
                     if valid_pred_iou_wrt_pl is not None:
+                        # classwise local foreground threshold used in IoU target assignment (0.65,0.45,0.4 for Car,Ped,Cyc)
                         fg_threshs = self.config.ROI_HEAD.TARGET_CONFIG.UNLABELED_CLS_FG_THRESH
-                        bg_thresh = self.config.ROI_HEAD.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH
+                        bg_thresh = self.config.ROI_HEAD.TARGET_CONFIG.UNLABELED_CLS_BG_THRESH  # 0.25 for all classes
                         classwise_fg_thresh = fg_threshs[cind]
+                        
+                        # FG, UC, BG proposals wrt PLs
                         fg_mask_wrt_pl = valid_pred_iou_wrt_pl >= classwise_fg_thresh
                         bg_mask_wrt_pl = valid_pred_iou_wrt_pl <= bg_thresh
-                        uc_mask_wrt_pl = ~(bg_mask_wrt_pl | fg_mask_wrt_pl)  # uncertain mask
+                        uc_mask_wrt_pl = ~(bg_mask_wrt_pl | fg_mask_wrt_pl)
 
                         cls_fg_mask_wrt_pl = pred_cls_mask & fg_mask_wrt_pl
                         cls_uc_mask_wrt_pl = pred_cls_mask & uc_mask_wrt_pl
                         cls_bg_mask_wrt_pl = pred_cls_mask & bg_mask_wrt_pl
+                        
                         # ------ Foreground Mis-classification Metrics ------
+                        # Mask of TP, FP, FN proposals wrt GTs
                         fn_mask = (cls_bg_mask_wrt_pl | cls_uc_mask_wrt_pl) & cc_fg_mask
                         tp_mask = cls_fg_mask_wrt_pl & cc_fg_mask
                         fp_mask = cls_fg_mask_wrt_pl & (cls_bg_mask | cc_uc_mask)
+                        
+                        # Rate and ratio of FP, FN, TP proposals wrt GTs
                         classwise_metrics['pred_fn_rate'][cind] = fn_mask.sum() / cc_fg_mask.sum()
                         classwise_metrics['pred_tp_rate'][cind] = tp_mask.sum() / cc_fg_mask.sum()
                         classwise_metrics['pred_fp_ratio'][cind] = fp_mask.sum() / cls_fg_mask_wrt_pl.sum()
+
+                        # IoU of proposals wrt PL which are FG, FN, TP, FP wrt GTs
                         classwise_metrics['pred_ious_wrt_pl_fg'][cind] = (valid_pred_iou_wrt_pl * cc_fg_mask.float()).sum() / cc_fg_mask.sum()
                         classwise_metrics['pred_ious_wrt_pl_fn'][cind] = (valid_pred_iou_wrt_pl * fn_mask.float()).sum() / fn_mask.sum()
                         classwise_metrics['pred_ious_wrt_pl_fp'][cind] = (valid_pred_iou_wrt_pl * fp_mask.float()).sum() / fp_mask.sum()
                         classwise_metrics['pred_ious_wrt_pl_tp'][cind] = (valid_pred_iou_wrt_pl * tp_mask.float()).sum() / tp_mask.sum()
-                        cls_score_fg_fn = (valid_pred_scores * fn_mask.float()).sum() / fn_mask.sum()
-                        cls_score_fg_fp = (valid_pred_scores * fp_mask.float()).sum() / fp_mask.sum()
-                        cls_score_fg_tp = (valid_pred_scores * tp_mask.float()).sum() / tp_mask.sum()
-                        classwise_metrics['score_fgs_tp'][cind] = cls_score_fg_tp
-                        classwise_metrics['score_fgs_fn'][cind] = cls_score_fg_fn
-                        classwise_metrics['score_fgs_fp'][cind] = cls_score_fg_fp
-                        if valid_target_scores is not None:
-                            cls_target_score_fn = (valid_target_scores * fn_mask.float()).sum() / fn_mask.sum()
-                            classwise_metrics['target_score_fn'][cind] = cls_target_score_fn
-                            cls_target_score_tp = (valid_target_scores * tp_mask.float()).sum() / tp_mask.sum()
-                            classwise_metrics['target_score_tp'][cind] = cls_target_score_tp
-                            cls_target_score_fp = (valid_target_scores * fp_mask.float()).sum() / fp_mask.sum()
-                            classwise_metrics['target_score_fp'][cind] = cls_target_score_fp
-                        if valid_pred_weights is not None:
-                            cls_pred_weight_fg_mc = (valid_pred_weights * fn_mask.float()).sum() / fn_mask.sum()
-                            classwise_metrics['pred_weight_fn'][cind] = cls_pred_weight_fg_mc
-                            cls_pred_weight_cc_tp = (valid_pred_weights * tp_mask).sum() / tp_mask.float().sum()
-                            classwise_metrics['pred_weight_tp'][cind] = cls_pred_weight_cc_tp
-                            cls_pred_weight_cc_fp = (valid_pred_weights * fp_mask).sum() / fp_mask.float().sum()
-                            classwise_metrics['pred_weight_fp'][cind] = cls_pred_weight_cc_fp
 
+            # Fill the states of metrics with the computed values present in classwise_metrics
             for key, val in classwise_metrics.items():
                 # Note that unsqueeze is necessary because torchmetric performs the dist cat on dim 0.
                 getattr(self, key).append(val.unsqueeze(dim=0))
@@ -208,23 +230,35 @@ class PredQualityMetrics(Metric):
             for metric_name in self.metrics_name:
                 getattr(self, metric_name).append(sample_tensor.new_zeros(num_classes + 1).fill_(float('nan')))
 
+    '''
+    Compute the states of metrics and reset the states.
+    This function is called in the forward function of the model.
+    NOTE: It only computes the states based on the 'reset_state_interval'.
+    '''
     def compute(self):
+        # Dictionary that holds all the computed metrics and sends them to the tb logger.
         final_results = {}
+        
+        # If the number of samples is less than the reset_state_interval, the states are not computed.
+        # Else, compute the mean of the metrics
         if len(self.pred_ious) >= self.reset_state_interval:
             results = {}
             for mname in self.metrics_name:
                 mstate = getattr(self, mname)
                 if isinstance(mstate, torch.Tensor):
                     mstate = [mstate]
+                # Ignores the nan values in the tensors for mean computation.
                 results[mname] = nanmean(torch.cat(mstate, dim=0), dim=0)  # torch.nanmean is not available in pytorch < 1.8
 
+            # Fill the mean values in the dictionary to be sent to the tb logger.
             for key, val in results.items():
                 classwise_results = {}
                 for cind, cls in enumerate(self.dataset.class_names + ['cls_agnostic']):
                     if not torch.isnan(val[cind]):
                         classwise_results[cls] = val[cind].item()
                 final_results[key] = classwise_results
-
+            
+            # reset the states of metrics after computation
             self.reset()
 
         return final_results

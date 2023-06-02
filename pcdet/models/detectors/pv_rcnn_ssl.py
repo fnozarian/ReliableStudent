@@ -10,6 +10,10 @@ from.pv_rcnn import PVRCNN
 from ...utils.stats_utils import PredQualityMetrics
 import torch.distributed as dist
 
+'''
+Class to create object for PredQualityMetrics (in stats_utils.py)
+It creates a singleton object for each tag
+'''
 class MetricRegistry(object):
     def __init__(self, **kwargs):
         self._tag_metrics = {}
@@ -61,6 +65,9 @@ class PVRCNN_SSL(Detector3DTemplate):
             batch_dict['unlabeled_inds'] = unlabeled_inds
             batch_dict_ema = {}
             keys = list(batch_dict.keys())
+            
+            # Split the srongly augmented data of student's model and original data of teacher's model into two dicts
+            # batch_dict_ema contains the original data of teacher's model
             for k in keys:
                 if k + '_ema' in keys:
                     continue
@@ -69,7 +76,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     batch_dict_ema[k] = batch_dict[k]
 
-            # ------ forward pass of teacher model with gradients disabled ------
+            ''' ------ Forward pass of teacher model with gradients disabled ------ '''
             with torch.no_grad():
                 for cur_module in self.pv_rcnn_ema.module_list:
                     try:
@@ -93,7 +100,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             batch_dict['metric_registry'] = self.metric_registry
             batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
             
-            # ------ forward pass of student model ------
+            ''' ------ Forward pass of student model ------ '''
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
 
@@ -102,7 +109,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             self.pv_rcnn.roi_head.forward_ret_dict['pl_boxes'] = batch_dict['gt_boxes']
             self.pv_rcnn.roi_head.forward_ret_dict['pl_scores'] = pseudo_scores
 
-            # ------ Use teacher's rcnn to evaluate student's bg/fg proposals ------ 
+            ''' ------ Use teacher's rcnn to evaluate student's bg/fg proposals ------ '''
             with torch.no_grad():
                 batch_dict_std = {}
                 batch_dict_std['unlabeled_inds'] = batch_dict['unlabeled_inds']
@@ -132,7 +139,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 # This is used for reliability weights computation later
                 self.pv_rcnn.roi_head.forward_ret_dict['rcnn_cls_score_teacher'] = rcnn_cls_score_teacher
 
-            # Compute losses
+            ''' ------ Compute losses ------ '''
             disp_dict = {}
             loss_rpn_cls, loss_rpn_box, tb_dict = self.pv_rcnn.dense_head.get_loss(scalar=False)
             loss_point, tb_dict = self.pv_rcnn.point_head.get_loss(tb_dict, scalar=False)
@@ -161,6 +168,7 @@ class PVRCNN_SSL(Detector3DTemplate):
             # Total loss 
             loss = loss_rpn_cls + loss_rpn_box + loss_point + loss_rcnn_cls + loss_rcnn_box
 
+            # Fill the TB dict which is sent to the logger
             tb_dict_ = {}
             for key in tb_dict.keys():
                 if 'loss' in key:
@@ -175,7 +183,7 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     tb_dict_[key] = tb_dict[key]
 
-            # Update all the requried metrics 
+            # Update all the required metrics 
             for key in self.metric_registry.tags():
                 metrics = self.compute_metrics(tag=key)
                 tb_dict_.update(metrics)
@@ -200,6 +208,9 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             return pred_dicts, recall_dicts, {}
 
+    '''
+    Wrapper function to compute all the metrics
+    '''
     def compute_metrics(self, tag):
         results = self.metric_registry.get(tag).compute()
         tag = tag + "/" if tag else ''
@@ -212,19 +223,16 @@ class PVRCNN_SSL(Detector3DTemplate):
         pseudo_scores = []
         pseudo_sem_scores = []
         pseudo_labels = []
-        pseudo_boxes_var = []
-        pseudo_scores_var = []
         for ind in unlabeled_inds:
             pseudo_score = pred_dicts[ind]['pred_scores']
             pseudo_box = pred_dicts[ind]['pred_boxes']
             pseudo_label = pred_dicts[ind]['pred_labels']
             pseudo_sem_score = pred_dicts[ind]['pred_sem_scores']
+            
             if len(pseudo_label) == 0:
                 pseudo_boxes.append(pseudo_label.new_zeros((1, 7)).float())
-                pseudo_boxes_var.append(pseudo_label.new_zeros((1, 7)).float())
                 pseudo_sem_scores.append(pseudo_label.new_zeros((1,)).float())
                 pseudo_scores.append(pseudo_label.new_zeros((1,)).float())
-                pseudo_scores_var.append(pseudo_label.new_zeros((1,)).float())
                 pseudo_labels.append(pseudo_label.new_zeros((1,)).float())
                 continue
 
@@ -235,6 +243,9 @@ class PVRCNN_SSL(Detector3DTemplate):
 
         return pseudo_boxes, pseudo_labels, pseudo_scores, pseudo_sem_scores
 
+    '''
+    Filter the pseudo labels based on confidence thresholds
+    '''
     def _filter_pseudo_labels(self, pred_dicts, unlabeled_inds):
         pseudo_boxes = []
         pseudo_scores = []
@@ -270,6 +281,10 @@ class PVRCNN_SSL(Detector3DTemplate):
 
         return pseudo_boxes, pseudo_scores, pseudo_sem_scores
 
+    '''
+    Fill the pseudo labels in the batch dict 
+    NOTE: It makes sure that the size of PLs (of unlabeled samples) is same as GTs (of labeled samples)
+    '''
     def _fill_with_pseudo_labels(self, batch_dict, pseudo_boxes, unlabeled_inds, labeled_inds, key=None):
         key = 'gt_boxes' if key is None else key
         max_box_num = batch_dict['gt_boxes'].shape[1]
@@ -300,6 +315,10 @@ class PVRCNN_SSL(Detector3DTemplate):
                 new_boxes[unlabeled_inds[i]] = pseudo_box
             batch_dict[key] = new_boxes
 
+    '''
+    Apply augmentation based on student's augmentation policy
+    NOTE: This is currently hardcoded based on the student augmentation policy as per the paper.
+    '''
     def apply_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key='rois'):
         batch_dict[key][unlabeled_inds] = augmentor_utils.random_flip_along_x_bbox(
             batch_dict[key][unlabeled_inds], batch_dict_org['flip_x'][unlabeled_inds])
@@ -316,6 +335,10 @@ class PVRCNN_SSL(Detector3DTemplate):
 
         return batch_dict
 
+    '''
+    Reverse the augmentation based on student's augmentation policy
+    NOTE: This is currently hardcoded based on the student augmentation policy as per the paper.
+    '''
     def reverse_augmentation(self, batch_dict, batch_dict_org, unlabeled_inds, key='rois'):
         batch_dict[key][unlabeled_inds] = augmentor_utils.global_scaling_bbox(
             batch_dict[key][unlabeled_inds], 1.0 / batch_dict_org['scale'][unlabeled_inds])
@@ -332,6 +355,9 @@ class PVRCNN_SSL(Detector3DTemplate):
 
         return batch_dict
 
+    '''
+    EMA update for the teacher model weights
+    '''
     def update_global_step(self):
         self.global_step += 1
         alpha = self.model_cfg.EMA_ALPHA

@@ -34,6 +34,10 @@ class ProposalTargetLayer(nn.Module):
 
         return targets_dict
 
+    '''
+    Performs the subsampling of ROIs and assigns classification and regression targets for RCNN training.
+    It uses Top-K subsampler for unlabeled data and Randomly Balanced subsampler (default in PV-RCNN) for labeled data. 
+    '''
     def sample_rois_for_rcnn(self, batch_dict):
         """
         Args:
@@ -96,6 +100,9 @@ class ProposalTargetLayer(nn.Module):
 
         return targets_dict
 
+    '''
+    Subsample ROIs using Top-K subsampler for unlabeled data.
+    '''
     def subsample_unlabeled_rois(self, batch_dict, index):
         cur_roi = batch_dict['rois'][index]
         cur_gt_boxes = batch_dict['gt_boxes'][index]
@@ -148,6 +155,9 @@ class ProposalTargetLayer(nn.Module):
 
         return sampled_inds, cur_reg_valid_mask, cur_cls_labels, roi_ious, gt_assignment, interval_mask
 
+    '''
+    Subsample ROIs using Randomly balanced subsampler for labeled data.
+    '''
     def subsample_labeled_rois(self, batch_dict, index):
         cur_roi = batch_dict['rois'][index]
         cur_gt_boxes = batch_dict['gt_boxes'][index]

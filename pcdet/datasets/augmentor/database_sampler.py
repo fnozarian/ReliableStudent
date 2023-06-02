@@ -247,7 +247,6 @@ class DataBaseSampler(object):
         sampled_gt_boxes = existed_boxes[gt_boxes.shape[0]:, :]
 
         # do not use db sampler if we do not know gt boxes
-        # TODO(farzad) what if we only do db_sampling on the limited labeled data? e.g., 1% of samples.
         if total_valid_sampled_dict.__len__() > 0 and not no_db_sample:
             data_dict = self.add_sampled_boxes_to_scene(data_dict, sampled_gt_boxes, total_valid_sampled_dict)
 

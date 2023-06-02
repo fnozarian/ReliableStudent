@@ -107,6 +107,9 @@ class RoIHeadTemplate(nn.Module):
         batch_dict.pop('batch_index', None)
         return batch_dict
 
+    '''
+    Prepares the input data for metrics calculation and calls the metrics update function
+    '''
     def update_metrics(self, targets_dict):
         metric_registry = targets_dict['metric_registry']
         unlabeled_inds = targets_dict['unlabeled_inds']
