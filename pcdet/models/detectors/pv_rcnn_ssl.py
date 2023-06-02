@@ -7,31 +7,7 @@ from pcdet.datasets.augmentor import augmentor_utils
 from ...utils import common_utils
 from .detector3d_template import Detector3DTemplate
 from.pv_rcnn import PVRCNN
-from ...utils.stats_utils import PredQualityMetrics
 import torch.distributed as dist
-
-'''
-Class to create object for PredQualityMetrics (in stats_utils.py)
-It creates a singleton object for each tag
-'''
-class MetricRegistry(object):
-    def __init__(self, **kwargs):
-        self._tag_metrics = {}
-        self.dataset = kwargs.get('dataset', None)
-        self.cls_bg_thresh = kwargs.get('cls_bg_thresh', None)
-        self.model_cfg = kwargs.get('model_cfg', None)
-    def get(self, tag=None):
-        if tag is None:
-            tag = 'default'
-        if tag in self._tag_metrics.keys():
-            metric = self._tag_metrics[tag]
-        else:
-            metric = PredQualityMetrics(tag=tag, dataset=self.dataset, cls_bg_thresh=self.cls_bg_thresh, config=self.model_cfg)
-            self._tag_metrics[tag] = metric
-        return metric
-
-    def tags(self):
-        return self._tag_metrics.keys()
 
 class PVRCNN_SSL(Detector3DTemplate):
     def __init__(self, model_cfg, num_class, dataset):
@@ -54,7 +30,6 @@ class PVRCNN_SSL(Detector3DTemplate):
         self.unlabeled_weight = model_cfg.UNLABELED_WEIGHT
         self.no_nms = model_cfg.NO_NMS
         self.supervise_mode = model_cfg.SUPERVISE_MODE
-        self.metric_registry = MetricRegistry(dataset=self.dataset, model_cfg=model_cfg)
 
     def forward(self, batch_dict):
         if self.training:
@@ -86,9 +61,6 @@ class PVRCNN_SSL(Detector3DTemplate):
             pred_dicts_ens, _ = self.pv_rcnn_ema.post_processing(batch_dict_ema, no_recall_dict=True,
                                                                 override_thresh=0.0,
                                                                 no_nms_for_unlabeled=self.no_nms)
-            
-            # Store the original GTs for unlabeled data (later used for analysis)
-            ori_unlabeled_boxes = batch_dict['gt_boxes'][unlabeled_inds, ...]
 
             # Use teacher's predictions as pseudo labels - Filter them and then fill in the batch_dict
             pseudo_boxes, pseudo_scores, _ = self._filter_pseudo_labels(pred_dicts_ens, unlabeled_inds)
@@ -96,18 +68,12 @@ class PVRCNN_SSL(Detector3DTemplate):
 
             # apply student's augs on teacher's pseudo-labels (filtered) only (not points)
             batch_dict = self.apply_augmentation(batch_dict, batch_dict, unlabeled_inds, key='gt_boxes')
-
-            batch_dict['metric_registry'] = self.metric_registry
-            batch_dict['ori_unlabeled_boxes'] = ori_unlabeled_boxes
             
             ''' ------ Forward pass of student model ------ '''
             for cur_module in self.pv_rcnn.module_list:
                 batch_dict = cur_module(batch_dict)
 
-            # For metrics calculation
             self.pv_rcnn.roi_head.forward_ret_dict['unlabeled_inds'] = unlabeled_inds
-            self.pv_rcnn.roi_head.forward_ret_dict['pl_boxes'] = batch_dict['gt_boxes']
-            self.pv_rcnn.roi_head.forward_ret_dict['pl_scores'] = pseudo_scores
 
             ''' ------ Use teacher's rcnn to evaluate student's bg/fg proposals ------ '''
             with torch.no_grad():
@@ -183,11 +149,6 @@ class PVRCNN_SSL(Detector3DTemplate):
                 else:
                     tb_dict_[key] = tb_dict[key]
 
-            # Update all the required metrics 
-            for key in self.metric_registry.tags():
-                metrics = self.compute_metrics(tag=key)
-                tb_dict_.update(metrics)
-
             if dist.is_initialized():
                 rank = os.getenv('RANK')
                 tb_dict_[f'bs_rank_{rank}'] = int(batch_dict['gt_boxes'].shape[0])
@@ -207,16 +168,6 @@ class PVRCNN_SSL(Detector3DTemplate):
             pred_dicts, recall_dicts = self.pv_rcnn.post_processing(batch_dict)
 
             return pred_dicts, recall_dicts, {}
-
-    '''
-    Wrapper function to compute all the metrics
-    '''
-    def compute_metrics(self, tag):
-        results = self.metric_registry.get(tag).compute()
-        tag = tag + "/" if tag else ''
-        metrics = {tag + key: val for key, val in results.items()}
-
-        return metrics
 
     def _unpack_predictions(self, pred_dicts, unlabeled_inds):
         pseudo_boxes = []

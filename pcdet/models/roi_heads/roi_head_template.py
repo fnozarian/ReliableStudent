@@ -107,64 +107,6 @@ class RoIHeadTemplate(nn.Module):
         batch_dict.pop('batch_index', None)
         return batch_dict
 
-    '''
-    Prepares the input data for metrics calculation and calls the metrics update function
-    '''
-    def update_metrics(self, targets_dict):
-        metric_registry = targets_dict['metric_registry']
-        unlabeled_inds = targets_dict['unlabeled_inds']
-
-        sample_preds, sample_pred_scores, sample_pred_weights = [], [], []
-        sample_rois, sample_roi_scores = [], []
-        sample_target_scores = []
-        sample_pls = []
-        sample_gts = []
-        sample_gt_iou_of_rois = []
-        for i, uind in enumerate(unlabeled_inds):
-            mask = targets_dict['rcnn_cls_labels'][uind] >= 0
-
-            # (Proposals) ROI info
-            rois = targets_dict['rois'][uind][mask].detach().clone()
-            roi_labels = targets_dict['roi_labels'][uind][mask].unsqueeze(-1).detach().clone()
-            roi_scores = torch.sigmoid(targets_dict['roi_scores'])[uind][mask].detach().clone()
-            roi_labeled_boxes = torch.cat([rois, roi_labels], dim=-1)
-            gt_iou_of_rois = targets_dict['gt_iou_of_rois'][uind][mask].unsqueeze(-1).detach().clone()
-            sample_rois.append(roi_labeled_boxes)
-            sample_roi_scores.append(roi_scores)
-            sample_gt_iou_of_rois.append(gt_iou_of_rois)
-            
-            # Target info
-            target_scores = targets_dict['rcnn_cls_labels'][uind][mask].detach().clone()
-            sample_target_scores.append(target_scores)
-
-            # Student's Pred box and score info
-            pred_boxes = targets_dict['batch_box_preds'][uind][mask].detach().clone()
-            pred_scores = torch.sigmoid(targets_dict['rcnn_cls']).view_as(targets_dict['rcnn_cls_labels'])[uind][mask].detach().clone()
-            pred_labeled_boxes = torch.cat([pred_boxes, roi_labels], dim=-1)
-            sample_preds.append(pred_labeled_boxes)
-            sample_pred_scores.append(pred_scores)
-
-            # (Real labels) GT box info
-            gt_labeled_boxes = targets_dict['ori_unlabeled_boxes'][i]
-            sample_gts.append(gt_labeled_boxes)
-
-            # (Pseudo labels) PL box info
-            pl_labeled_boxes = targets_dict['pl_boxes'][uind]
-            sample_pls.append(pl_labeled_boxes)
-
-            # Reliability weight info
-            pred_weights = targets_dict['rcnn_cls_weights'][uind][mask].detach().clone()
-            sample_pred_weights.append(pred_weights)
-
-        # Update metrics with above infos
-        tag = f'rcnn_roi_pl_gt_metrics_cls'
-        metrics = metric_registry.get(tag)
-        metric_inputs = {'preds': sample_rois, 'pred_scores': sample_roi_scores,
-                        'ground_truths': sample_gts, 'pseudo_labels': sample_pls,
-                        'target_scores': sample_target_scores, 'pred_weights': sample_pred_weights,
-                        'pred_iou_wrt_pl': sample_gt_iou_of_rois}
-        metrics.update(**metric_inputs)
-
     def assign_targets(self, batch_dict):
 
         with torch.no_grad():
@@ -353,9 +295,6 @@ class RoIHeadTemplate(nn.Module):
         # Get reliability weights for unlabeled samples 
         unlabeled_inds = self.forward_ret_dict['unlabeled_inds']
         self.forward_ret_dict['rcnn_cls_weights'][unlabeled_inds] = self._get_reliability_weight(unlabeled_inds)
-
-        if self.model_cfg.get("ENABLE_METRICS", None):
-            self.update_metrics(self.forward_ret_dict)
 
         rcnn_loss_cls, cls_tb_dict = self.get_box_cls_layer_loss(self.forward_ret_dict, scalar=scalar)
         rcnn_loss_reg, reg_tb_dict = self.get_box_reg_layer_loss(self.forward_ret_dict, scalar=scalar)
